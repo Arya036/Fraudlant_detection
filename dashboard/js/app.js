@@ -4,12 +4,87 @@
 ═══════════════════════════════════════════════════════════════ */
 
 const API = 'http://127.0.0.1:8000/api';
+const API_KEY = (localStorage.getItem('FUNDFLOW_API_KEY') || 'dev-local-key-change-me').trim();
+
+function withApiKey(headers = {}) {
+  return { ...headers, 'X-API-Key': API_KEY };
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentPage = 'dashboard';
 let dashStats   = {};
+
+// ── Live KPI counters (in-memory, incremented by WS/gateway events) ────────────
+let _kpiTotal  = 0;
+let _kpiFraud  = 0;
+let _kpiAlerts = 0;
+
+/**
+ * Animate a KPI element from its current value to newVal.
+ * Uses a rapid tick-up animation so the number visibly increments.
+ */
+function animateKPI(elId, newVal, flashColor) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const current = parseInt(el.textContent.replace(/,/g,'')) || 0;
+  if (newVal <= current) { el.textContent = fmtNum(newVal); return; }
+  const diff  = newVal - current;
+  const steps = Math.min(diff, 20);          // max 20 animation frames
+  const step  = diff / steps;
+  let  done   = 0;
+  const tick  = () => {
+    done++;
+    const v = done < steps ? Math.round(current + step * done) : newVal;
+    el.textContent = fmtNum(v);
+    if (done < steps) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  // Flash the element
+  el.style.transition = 'color 0.15s';
+  el.style.color = flashColor || '#ffffff';
+  setTimeout(() => { el.style.color = ''; }, 500);
+}
+
+/**
+ * Called by WebSocket (any transaction) and Gateway Simulator on every decision.
+ * tier: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
+ * isAlert: true if a new alert was created
+ */
+function liveIncrementKPI(tier, isAlert) {
+  _kpiTotal++;
+  animateKPI('kpi-total', _kpiTotal, '#4a9eff');
+
+  const isFraud = (tier === 'CRITICAL' || tier === 'HIGH');
+  if (isFraud) {
+    _kpiFraud++;
+    animateKPI('kpi-fraud', _kpiFraud, '#ff3d5a');
+  }
+
+  if (isAlert) {
+    _kpiAlerts++;
+    animateKPI('kpi-alerts', _kpiAlerts, '#ff8c42');
+    pulseAlertBadge(tier);
+  }
+}
+
+/**
+ * Pulse the sidebar alert badge red when a new CRITICAL/HIGH alert arrives.
+ */
+function pulseAlertBadge(tier) {
+  const badge = document.getElementById('alert-badge');
+  if (!badge) return;
+  // Increment count
+  const current = parseInt(badge.textContent) || 0;
+  badge.textContent = current + 1;
+  // Trigger animation class
+  badge.classList.remove('badge-pulse');      // reset if already animating
+  void badge.offsetWidth;                     // force reflow
+  badge.classList.add('badge-pulse');
+  badge.addEventListener('animationend', () => badge.classList.remove('badge-pulse'), { once: true });
+}
 let allAlerts   = [];
 let allCases    = [];
+let uploadDetectedColumns = [];
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -70,14 +145,19 @@ async function loadDashboard() {
   if (!data) return;
   dashStats = data;
 
-  document.getElementById('kpi-total').textContent  = fmtNum(data.total_transactions);
-  document.getElementById('kpi-fraud').textContent  = fmtNum(data.fraud_count);
-  document.getElementById('kpi-alerts').textContent = fmtNum(data.active_alerts);
+  // Seed in-memory counters from fresh API data
+  _kpiTotal  = data.total_transactions || _kpiTotal;
+  _kpiFraud  = data.fraud_count        || _kpiFraud;
+  _kpiAlerts = data.active_alerts      || _kpiAlerts;
+
+  document.getElementById('kpi-total').textContent  = fmtNum(_kpiTotal);
+  document.getElementById('kpi-fraud').textContent  = fmtNum(_kpiFraud);
+  document.getElementById('kpi-alerts').textContent = fmtNum(_kpiAlerts);
   document.getElementById('kpi-rings').textContent  = fmtNum(data.rings_detected);
   document.getElementById('kpi-mules').textContent  = fmtNum(data.mules_detected);
 
   document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-  document.getElementById('alert-badge').textContent  = data.active_alerts;
+  document.getElementById('alert-badge').textContent  = _kpiAlerts;
 
   drawRiskDistChart(data.risk_distribution);
   drawFraudTypeChart(data.fraud_by_type);
@@ -127,6 +207,7 @@ function createAlertCard(alert) {
   const card = document.createElement('div');
   card.className = 'alert-card';
   card.style.borderLeftColor = severityColor(alert.severity);
+  card.style.cursor = 'pointer';
 
   const accs = Array.isArray(alert.accounts_involved)
     ? alert.accounts_involved.slice(0,2).join(', ')
@@ -150,10 +231,145 @@ function createAlertCard(alert) {
     <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
       <span class="text-muted">${fmtDateTime(alert.timestamp)}</span>
       <span class="case-status-badge status-${alert.status}">${alert.status}</span>
+      <span style="margin-left:auto;font-size:0.7rem;color:var(--text-muted)">Click to analyse →</span>
     </div>`;
 
+  card.addEventListener('click', () => openAlertPanel(alert));
   return card;
 }
+
+// ── Alert Detail Panel ─────────────────────────────────────────────────────────
+async function openAlertPanel(alert) {
+  const overlay = document.getElementById('alert-detail-overlay');
+  const body    = document.getElementById('adp-body');
+  const sevTag  = document.getElementById('adp-severity-tag');
+  const sevColor = severityColor(alert.severity);
+
+  // Set severity tag colour
+  sevTag.textContent = alert.severity || 'MEDIUM';
+  sevTag.style.background = sevColor + '22';
+  sevTag.style.color = sevColor;
+  sevTag.style.borderColor = sevColor + '55';
+
+  // Show panel immediately with loading state
+  overlay.style.display = 'flex';
+
+  const accs = Array.isArray(alert.accounts_involved)
+    ? alert.accounts_involved : [alert.accounts_involved || ''];
+
+  const riskPct = Math.round((alert.risk_score || 0) * 100);
+  const riskColor = riskPct >= 70 ? '#ff3d5a' : riskPct >= 40 ? '#ffbb33' : '#00e676';
+
+  // Parse evidence for SHAP-like bars
+  const evidence = typeof alert.evidence === 'object' ? alert.evidence : {};
+  const txnId    = evidence.txn_id || '';
+  const gwDec    = evidence.gateway_decision || '';
+
+  // Build risk signal rows from what we know
+  const signals = [
+    { label: 'ML Risk Score',    value: alert.risk_score || 0,  color: riskColor },
+    { label: 'Amount Exposure',  value: Math.min((alert.total_amount || 0) / 500000, 1), color: '#ff8c42' },
+    { label: 'Accounts Flagged', value: Math.min(accs.length / 5, 1), color: '#6c63ff' },
+  ];
+
+  const signalBars = signals.map(s => {
+    const barW = Math.round(s.value * 100);
+    const displayVal = s.label === 'ML Risk Score'
+      ? (s.value * 100).toFixed(0) + '%'
+      : s.label === 'Amount Exposure'
+        ? '₹' + Number(alert.total_amount || 0).toLocaleString('en-IN')
+        : accs.length + ' account' + (accs.length !== 1 ? 's' : '');
+    return `
+      <div class="adp-signal-row">
+        <div class="adp-signal-label">${s.label}</div>
+        <div class="adp-signal-bar-wrap">
+          <div class="adp-signal-bar" style="width:${barW}%;background:${s.color}"></div>
+        </div>
+        <div class="adp-signal-val" style="color:${s.color}">${displayVal}</div>
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <!-- Metadata pills -->
+    <div class="adp-meta-grid">
+      <div class="adp-meta-item">
+        <div class="adp-meta-label">Amount</div>
+        <div class="adp-meta-value" style="color:${riskColor}">${fmtCurrency(alert.total_amount)}</div>
+      </div>
+      <div class="adp-meta-item">
+        <div class="adp-meta-label">Risk Score</div>
+        <div class="adp-meta-value" style="color:${riskColor}">${riskPct}%</div>
+      </div>
+      <div class="adp-meta-item">
+        <div class="adp-meta-label">Status</div>
+        <div class="adp-meta-value"><span class="case-status-badge status-${alert.status}">${alert.status}</span></div>
+      </div>
+      <div class="adp-meta-item">
+        <div class="adp-meta-label">Created</div>
+        <div class="adp-meta-value" style="font-size:0.8rem">${fmtDateTime(alert.timestamp)}</div>
+      </div>
+    </div>
+
+    <!-- Description -->
+    <p class="adp-description">${alert.description || ''}</p>
+
+    ${txnId ? `<div class="adp-txn-ref">TXN: <span style="color:#6c63ff;font-family:monospace">${txnId}</span>${gwDec ? ' &nbsp;·&nbsp; Decision: <span style="color:' + riskColor + ';font-weight:700">' + gwDec + '</span>' : ''}</div>` : ''}
+
+    <!-- ML Signals -->
+    <div class="adp-section-title">ML Explanation</div>
+    <div class="adp-signals">${signalBars}</div>
+
+    <!-- Accounts -->
+    <div class="adp-section-title">Accounts Involved</div>
+    <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1rem">
+      ${accs.map(a => `<span style="font-size:0.75rem;padding:3px 8px;border-radius:4px;background:rgba(108,99,255,0.12);color:#a5b4fc;font-family:monospace">${a}</span>`).join('')}
+    </div>
+
+    <!-- OpenAI Analysis — loading -->
+    <div class="adp-section-title">🤖 OpenAI Analysis</div>
+    <div id="adp-ai-box" class="adp-ai-box adp-ai-loading">
+      <div class="adp-ai-spinner"></div>
+      <span>Generating analysis...</span>
+    </div>
+
+    <!-- Recommended Action -->
+    <div class="adp-section-title">Recommended Action</div>
+    <div class="adp-action-box">${alert.recommended_action || 'Investigate the flagged accounts.'}</div>
+  `;
+
+  // Now fire GPT analysis async
+  try {
+    const res = await apiFetch('/alerts/' + alert.alert_id + '/analyze', { method: 'POST' });
+    const aiBox = document.getElementById('adp-ai-box');
+    if (!aiBox) return;
+
+    if (res && res.analysis) {
+      const isGPT = res.source === 'openai';
+      aiBox.className = 'adp-ai-box adp-ai-done';
+      aiBox.innerHTML = `
+        <div class="adp-ai-badge">${isGPT ? '✨ GPT-4o-mini Analysis' : '📋 Template Analysis'}</div>
+        <p class="adp-ai-text">${res.analysis}</p>
+      `;
+    } else {
+      aiBox.className = 'adp-ai-box adp-ai-error';
+      aiBox.innerHTML = '<span style="color:#ff3d5a">Analysis unavailable.</span>';
+    }
+  } catch (e) {
+    const aiBox = document.getElementById('adp-ai-box');
+    if (aiBox) {
+      aiBox.className = 'adp-ai-box adp-ai-error';
+      aiBox.innerHTML = '<span style="color:#ff3d5a">Analysis failed: ' + e.message + '</span>';
+    }
+  }
+}
+
+function closeAlertPanel(event) {
+  if (event.target === document.getElementById('alert-detail-overlay')) {
+    document.getElementById('alert-detail-overlay').style.display = 'none';
+  }
+}
+
+
 
 document.getElementById('alerts-filter').addEventListener('change', loadAlerts);
 
@@ -398,6 +614,7 @@ function riskScoreBadge(score) {
 
 // ── Initialise ────────────────────────────────────────────────────────────────
 loadDashboard();
+initUploadMapper();
 setInterval(loadDashboard, 30000);  // Refresh every 30s
 
 // ── Simulator Controls ────────────────────────────────────────────────────────
@@ -409,10 +626,14 @@ let _simPollHandle = null;
 async function toggleSimulator() {
   const btn  = document.getElementById('btn-sim-toggle');
   const rate = parseInt(document.getElementById('sim-rate')?.value || '2');
+  const liveAlertsEnabled = Boolean(document.getElementById('sim-live-alerts')?.checked);
 
   if (!_simRunning) {
     // START
-    const res = await apiFetch(`/simulate/start?rate=${rate}`, { method: 'POST' });
+    const res = await apiFetch(
+      `/simulate/start?rate=${rate}&live_alerts=${liveAlertsEnabled}`,
+      { method: 'POST' }
+    );
     if (!res) return;
     _simRunning = true;
     _simScored  = 0;
@@ -421,7 +642,9 @@ async function toggleSimulator() {
     btn.style.background = '#ff3d5a';
     document.getElementById('sim-bar').classList.add('running');
     document.getElementById('sim-status-dot').style.background = '#00e676';
-    document.getElementById('sim-status-txt').textContent = `● Simulating @ ${rate} tx/sec`;
+    document.getElementById('sim-status-txt').textContent =
+      `● Simulating @ ${rate} tx/sec${liveAlertsEnabled ? ' · alerts on' : ' · alerts off'}`;
+    document.getElementById('sim-live-alert-count').textContent = '0';
     // Poll stats every 2s
     _simPollHandle = setInterval(_pollSimStats, 2000);
   } else {
@@ -436,7 +659,7 @@ async function toggleSimulator() {
     if (_simPollHandle) { clearInterval(_simPollHandle); _simPollHandle = null; }
     if (res) {
       document.getElementById('sim-latency').textContent =
-        `Session: ${res.processed} scored, ${res.fraud_detected} flagged`;
+        `Session: ${res.processed} scored, ${res.fraud_detected} flagged, ${res.live_alerts_created || 0} live alerts`;
     }
   }
 }
@@ -451,6 +674,8 @@ async function _pollSimStats() {
   }
   document.getElementById('sim-count').textContent = (data.processed || 0).toLocaleString('en-IN');
   document.getElementById('sim-fraud').textContent = (data.fraud_detected || 0).toLocaleString('en-IN');
+  document.getElementById('sim-live-alert-count').textContent =
+    (data.live_alerts_created || 0).toLocaleString('en-IN');
 }
 
 // Called by websocket.js on each incoming transaction to update counters instantly
@@ -562,64 +787,396 @@ function showAAModal() {
   }, 1500);
 }
 
-// ── Manual Transaction Scorer ─────────────────────────────────────────────────
-async function scoreManualTxn() {
-  const senderId = document.getElementById('man-sender').value.trim();
-  const receiverId = document.getElementById('man-receiver').value.trim();
-  const amount = document.getElementById('man-amount').value;
-  const txnType = document.getElementById('man-type').value;
+// ── Payment Gateway Simulator ─────────────────────────────────────────────────
+async function processGatewayPayment() {
+  const senderId   = document.getElementById('gw-sender').value.trim();
+  const receiverId = document.getElementById('gw-receiver').value.trim();
+  const amount     = document.getElementById('gw-amount').value;
+  const txnType    = document.getElementById('gw-type').value;
 
   if (!senderId || !receiverId || !amount) {
-    alert("Please fill in all details");
+    alert("Please fill in all payment details");
     return;
   }
 
-  const resultBox = document.getElementById('man-score-result');
-  resultBox.style.display = 'block';
-  resultBox.innerHTML = '<div class="loading-spinner">Scoring via XGBoost Pipeline...</div>';
+  const processing = document.getElementById('gw-processing');
+  const resultBox  = document.getElementById('gw-result');
+  const processBtn = document.querySelector('.gw-process-btn');
+
+  resultBox.style.display = 'none';
+  processing.style.display = 'block';
+  processBtn.disabled = true;
+  processBtn.style.opacity = '0.5';
 
   const payload = {
-    sender_account: senderId,
+    sender_account:   senderId,
     receiver_account: receiverId,
-    amount: parseFloat(amount),
-    txn_type: txnType
+    amount:           parseFloat(amount),
+    txn_type:         txnType
   };
 
   try {
-    const res = await apiFetch('/score', {
+    const res = await apiFetch('/gateway', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: withApiKey({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
 
-    if (res && res.fraud_probability !== undefined) {
-      const pct = Math.round(res.fraud_probability * 100);
-      const tier = res.risk_tier || 'LOW';
-      const color = severityColor(tier);
+    await new Promise(r => setTimeout(r, 600));
+    processing.style.display = 'none';
 
-      let featuresHtml = '';
-      if (res.top_features && res.top_features.length > 0) {
-        featuresHtml = '<div style="margin-top:10px; font-size:0.8rem; color:var(--text-muted)"><strong>Top Risk Factors:</strong><ul>';
-        res.top_features.forEach(f => {
-          featuresHtml += `<li>${f.feature.replace(/_/g, ' ')}: ${(f.contribution || 0).toFixed(2)}</li>`;
-        });
-        featuresHtml += '</ul></div>';
+    if (res && res.decision) {
+      const decision = res.decision;
+      const pct      = Math.round(res.fraud_probability * 100);
+      const tier     = res.risk_tier || 'LOW';
+      const latency  = res.latency_ms || '?';
+      const alertId  = res.alert_id;
+      const ctx      = res._context || {};
+      const gptText  = res.gpt_explanation || '';
+      const topF     = res.top_features || [];
+
+      // ⚡ Live KPI update — gateway decision fires counters
+      const isAlert = (decision === 'BLOCKED' || decision === 'FLAGGED');
+      liveIncrementKPI(tier, isAlert);
+
+      let dIcon, dColor, dBgFrom, dBgTo, dSub;
+      if (decision === 'BLOCKED') {
+        dIcon = '\u{1F6AB}'; dColor = '#ff3d5a';
+        dBgFrom = 'rgba(255,61,90,0.15)'; dBgTo = 'rgba(255,61,90,0.05)';
+        dSub = 'Transaction pre-emptively stopped \u2014 funds NOT transferred';
+      } else if (decision === 'FLAGGED') {
+        dIcon = '\u26A0\uFE0F'; dColor = '#ffbb33';
+        dBgFrom = 'rgba(255,187,51,0.15)'; dBgTo = 'rgba(255,187,51,0.05)';
+        dSub = 'Transaction held for manual review before settlement';
+      } else {
+        dIcon = '\u2705'; dColor = '#00e676';
+        dBgFrom = 'rgba(0,230,118,0.15)'; dBgTo = 'rgba(0,230,118,0.05)';
+        dSub = 'Transaction approved \u2014 payment processing';
       }
 
-      resultBox.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:flex-start">
-          <div>
-            <h3 style="margin:0 0 4px 0; color:var(--text-primary)">Score: ${pct}% Risk</h3>
-            <span style="font-size:0.85rem; padding:2px 8px; border-radius:4px; font-weight:bold; background:${color}22; color:${color}">${tier}</span>
-          </div>
-        </div>
-        ${featuresHtml}
-      `;
+      let factorsHtml = '';
+      if (topF.length > 0 && decision !== 'APPROVED') {
+        factorsHtml = '<div style="margin-top:1rem"><div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;letter-spacing:1px">Risk Factors (SHAP)</div>';
+        topF.slice(0, 5).forEach(f => {
+          const name = f.feature.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          const val  = (f.contribution || 0).toFixed(3);
+          const barW = Math.min(Math.abs(f.contribution || 0) * 200, 100);
+          factorsHtml += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;font-size:0.8rem">'
+            + '<div style="width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)">' + name + '</div>'
+            + '<div style="flex:1;height:6px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden">'
+            + '<div style="width:' + barW + '%;height:100%;background:' + dColor + ';border-radius:3px;transition:width 0.5s ease"></div>'
+            + '</div>'
+            + '<div style="width:50px;text-align:right;font-family:monospace;font-size:0.75rem;color:' + dColor + '">+' + val + '</div>'
+            + '</div>';
+        });
+        factorsHtml += '</div>';
+      }
+
+      let gptHtml = '';
+      if (gptText) {
+        gptHtml = '<div style="margin-top:1rem;padding:0.75rem;border-radius:8px;background:rgba(108,99,255,0.08);border:1px solid rgba(108,99,255,0.2)">'
+          + '<div style="font-size:0.7rem;text-transform:uppercase;color:#6c63ff;margin-bottom:0.4rem;letter-spacing:1px">\u{1F916} AI Fraud Analyst Explanation</div>'
+          + '<p style="font-size:0.82rem;color:var(--text-secondary);margin:0;line-height:1.5">' + gptText + '</p>'
+          + '</div>';
+      }
+
+      const ctxColor = ctx.history_used ? '#00e676' : '#ffbb33';
+      const ctxIcon  = ctx.history_used ? '\u2705' : '\u26A0\uFE0F';
+      const ctxHtml  = '<div style="font-size:0.7rem;color:' + ctxColor + ';margin-top:0.75rem">' + ctxIcon + ' ' + (ctx.message || '') + '</div>';
+
+      const alertHtml = alertId
+        ? '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem">\u{1F4CB} Alert created: <span style="color:#6c63ff;font-family:monospace">' + alertId + '</span></div>'
+        : '';
+
+      resultBox.style.display = 'block';
+      resultBox.className = 'gw-decision gw-decision-' + decision.toLowerCase();
+      resultBox.innerHTML = '<div style="background:linear-gradient(135deg,' + dBgFrom + ',' + dBgTo + ');padding:1.5rem;border:1px solid ' + dColor + '33;border-radius:12px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+        + '<div>'
+        + '<div style="font-size:2rem;font-weight:800;color:' + dColor + ';line-height:1;margin-bottom:0.25rem">' + dIcon + ' TRANSACTION ' + decision + '</div>'
+        + '<div style="font-size:0.8rem;color:var(--text-muted)">' + dSub + '</div>'
+        + '</div>'
+        + '<div style="text-align:right">'
+        + '<div style="font-size:1.8rem;font-weight:700;color:' + dColor + '">' + pct + '%</div>'
+        + '<div style="font-size:0.7rem;color:var(--text-muted)">fraud risk</div>'
+        + '</div>'
+        + '</div>'
+        + '<div style="display:flex;gap:1rem;margin-top:1rem;flex-wrap:wrap">'
+        + '<div style="background:rgba(0,0,0,0.2);padding:0.5rem 0.75rem;border-radius:6px;font-size:0.8rem"><span style="color:var(--text-muted)">Latency:</span> <span style="color:#4a9eff;font-weight:700;font-family:monospace">' + latency + 'ms</span></div>'
+        + '<div style="background:rgba(0,0,0,0.2);padding:0.5rem 0.75rem;border-radius:6px;font-size:0.8rem"><span style="color:var(--text-muted)">Tier:</span> <span style="color:' + dColor + ';font-weight:700">' + tier + '</span></div>'
+        + '<div style="background:rgba(0,0,0,0.2);padding:0.5rem 0.75rem;border-radius:6px;font-size:0.8rem"><span style="color:var(--text-muted)">Rail:</span> <span style="font-weight:700;color:var(--text-primary)">' + payload.txn_type + '</span></div>'
+        + '<div style="background:rgba(0,0,0,0.2);padding:0.5rem 0.75rem;border-radius:6px;font-size:0.8rem"><span style="color:var(--text-muted)">Amount:</span> <span style="font-weight:700;color:var(--text-primary)">\u20B9' + parseFloat(amount).toLocaleString('en-IN') + '</span></div>'
+        + '</div>'
+        + factorsHtml
+        + gptHtml
+        + ctxHtml
+        + alertHtml
+        + '</div>';
     } else {
-      resultBox.innerHTML = '<span style="color:#ff3d5a">Scoring failed.</span>';
+      resultBox.style.display = 'block';
+      resultBox.innerHTML = '<div style="padding:1rem;color:#ff3d5a">Gateway scoring failed.</div>';
     }
   } catch (e) {
-    resultBox.innerHTML = `<span style="color:#ff3d5a">Error: ${e.message}</span>`;
+    processing.style.display = 'none';
+    resultBox.style.display = 'block';
+    resultBox.innerHTML = '<div style="padding:1rem;color:#ff3d5a">Error: ' + e.message + '</div>';
+  } finally {
+    processBtn.disabled = false;
+    processBtn.style.opacity = '1';
+  }
+}
+
+// ── Upload + Column Mapping ──────────────────────────────────────────────────
+function _escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function _parseCsvHeaderLine(line) {
+  const cols = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      const next = line[i + 1];
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      cols.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  cols.push(current.trim());
+
+  return cols
+    .map(c => c.replace(/^"|"$/g, '').trim())
+    .filter(Boolean);
+}
+
+function _detectColumnsFromText(fileName, text) {
+  if ((fileName || '').toLowerCase().endsWith('.json')) {
+    const parsed = JSON.parse(text);
+    let sample = null;
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
+      sample = parsed[0];
+    } else if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
+      sample = parsed.records[0];
+    } else if (parsed && typeof parsed === 'object') {
+      sample = parsed;
+    }
+    return sample ? Object.keys(sample) : [];
+  }
+
+  const headerLine = text.split(/\r?\n/).find(line => line.trim().length > 0) || '';
+  return _parseCsvHeaderLine(headerLine);
+}
+
+function _guessUploadMapping(columns) {
+  const normalized = columns.map(c => ({ raw: c, key: String(c).trim().toLowerCase() }));
+  const pick = (candidates) => {
+    const hit = normalized.find(c => candidates.includes(c.key));
+    return hit ? hit.raw : '';
+  };
+
+  return {
+    sender_account: pick(['sender_account', 'sender', 'from_account', 'debit_account', 'nameorig']),
+    receiver_account: pick(['receiver_account', 'receiver', 'to_account', 'credit_account', 'namedest']),
+    amount: pick(['amount', 'txn_amount', 'transaction_amount', 'amt']),
+    timestamp: pick(['timestamp', 'txn_time', 'transaction_time', 'datetime', 'created_at']),
+    txn_type: pick(['txn_type', 'type', 'transaction_type', 'channel_type']),
+    channel: pick(['channel', 'mode', 'payment_channel'])
+  };
+}
+
+function _populateUploadMappingSelects(columns, guessed = {}) {
+  const config = [
+    { id: 'upload-map-sender', target: 'sender_account' },
+    { id: 'upload-map-receiver', target: 'receiver_account' },
+    { id: 'upload-map-amount', target: 'amount' },
+    { id: 'upload-map-timestamp', target: 'timestamp' },
+    { id: 'upload-map-txn-type', target: 'txn_type' },
+    { id: 'upload-map-channel', target: 'channel' }
+  ];
+
+  config.forEach(({ id, target }) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.innerHTML = '<option value="">(auto / not set)</option>';
+    columns.forEach(col => {
+      const opt = document.createElement('option');
+      opt.value = col;
+      opt.textContent = col;
+      el.appendChild(opt);
+    });
+
+    if (guessed[target] && columns.includes(guessed[target])) {
+      el.value = guessed[target];
+    }
+  });
+}
+
+function _collectUploadMapping() {
+  const mapField = (id) => (document.getElementById(id)?.value || '').trim();
+  const mapping = {};
+
+  const sender = mapField('upload-map-sender');
+  const receiver = mapField('upload-map-receiver');
+  const amount = mapField('upload-map-amount');
+  const timestamp = mapField('upload-map-timestamp');
+  const txnType = mapField('upload-map-txn-type');
+  const channel = mapField('upload-map-channel');
+
+  if (sender) mapping.sender_account = sender;
+  if (receiver) mapping.receiver_account = receiver;
+  if (amount) mapping.amount = amount;
+  if (timestamp) mapping.timestamp = timestamp;
+  if (txnType) mapping.txn_type = txnType;
+  if (channel) mapping.channel = channel;
+
+  return mapping;
+}
+
+function _renderUploadSample(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return '<div style="margin-top:.5rem;color:var(--text-muted)">No sample rows returned.</div>';
+  }
+
+  const cols = Object.keys(rows[0]).slice(0, 8);
+  const header = cols.map(c => `<th>${_escapeHtml(c)}</th>`).join('');
+  const body = rows.slice(0, 3).map(r => {
+    const cells = cols.map(c => `<td>${_escapeHtml(r[c])}</td>`).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div style="margin-top:.65rem;overflow:auto">
+      <table class="data-table" style="font-size:.75rem">
+        <thead><tr>${header}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function prepareUploadMapping() {
+  const fileInput = document.getElementById('upload-file');
+  const result = document.getElementById('upload-result');
+  const file = fileInput?.files?.[0];
+
+  if (!file) {
+    if (result) {
+      result.style.borderColor = 'rgba(255,140,66,0.35)';
+      result.style.background = 'rgba(255,140,66,0.08)';
+      result.textContent = 'Choose a CSV or JSON file first.';
+    }
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const columns = _detectColumnsFromText(file.name, text);
+    if (!columns.length) throw new Error('No columns detected from file header/content');
+
+    uploadDetectedColumns = columns;
+    const guessed = _guessUploadMapping(columns);
+    _populateUploadMappingSelects(columns, guessed);
+
+    if (result) {
+      result.style.borderColor = 'rgba(74,158,255,0.35)';
+      result.style.background = 'rgba(74,158,255,0.08)';
+      result.innerHTML = `Detected ${columns.length} columns: ${columns.map(_escapeHtml).join(', ')}`;
+    }
+  } catch (e) {
+    if (result) {
+      result.style.borderColor = 'rgba(255,61,90,0.4)';
+      result.style.background = 'rgba(255,61,90,0.08)';
+      result.textContent = `Column detection failed: ${e.message}`;
+    }
+  }
+}
+
+async function uploadMappedTransactions() {
+  const fileInput = document.getElementById('upload-file');
+  const scoreCheckbox = document.getElementById('upload-score');
+  const persistCheckbox = document.getElementById('upload-persist');
+  const result = document.getElementById('upload-result');
+  const file = fileInput?.files?.[0];
+
+  if (!file) {
+    alert('Select a file first.');
+    return;
+  }
+
+  if (!uploadDetectedColumns.length) {
+    await prepareUploadMapping();
+  }
+
+  const mapping = _collectUploadMapping();
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mapping_json', JSON.stringify(mapping));
+  formData.append('score', String(Boolean(scoreCheckbox?.checked)));
+  formData.append('persist', String(Boolean(persistCheckbox?.checked)));
+
+  if (result) {
+    result.style.borderColor = 'rgba(74,158,255,0.35)';
+    result.style.background = 'rgba(74,158,255,0.08)';
+    result.textContent = 'Uploading and processing...';
+  }
+
+  try {
+    const res = await fetch(API + '/transactions/upload', {
+      method: 'POST',
+      headers: withApiKey(),
+      body: formData
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      throw new Error(payload.detail || `HTTP ${res.status}`);
+    }
+
+    if (result) {
+      result.style.borderColor = 'rgba(0,230,118,0.35)';
+      result.style.background = 'rgba(0,230,118,0.08)';
+      result.innerHTML = `
+        <div><strong>Upload complete.</strong></div>
+        <div style="margin-top:.25rem">Rows received: ${fmtNum(payload.rows_received)}</div>
+        <div>Rows normalized: ${fmtNum(payload.rows_normalized)}</div>
+        <div>Rows persisted: ${fmtNum(payload.rows_persisted)}</div>
+        <div>Scored: ${payload.scored ? 'yes' : 'no'} · Flagged >= 0.7: ${fmtNum(payload.flagged_ge_0_7)}</div>
+        ${_renderUploadSample(payload.sample)}
+      `;
+    }
+  } catch (e) {
+    if (result) {
+      result.style.borderColor = 'rgba(255,61,90,0.4)';
+      result.style.background = 'rgba(255,61,90,0.08)';
+      result.textContent = `Upload failed: ${e.message}`;
+    }
+  }
+}
+
+function initUploadMapper() {
+  _populateUploadMappingSelects([], {});
+  const fileInput = document.getElementById('upload-file');
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      uploadDetectedColumns = [];
+      prepareUploadMapping();
+    });
   }
 }
 
@@ -651,30 +1208,74 @@ async function showFraudExplanation(txnId) {
     }
 
     const res = await apiFetch(`/explain/${txnId}`);
-    if (res && res.ml_explanation && res.ml_explanation.top_contributors) {
-      const topFeats = res.ml_explanation.top_contributors;
+    if (res && res.ml_explanation) {
+      const topFeats = res.ml_explanation.top_contributors || res.ml_explanation.top_factors || [];
+      if (!topFeats.length) {
+        body.innerHTML = '<div>Explanation unavailable.</div>';
+        return;
+      }
       
       let html = `
         <div style="padding:1rem; border-left:3px solid #ff3d5a; background:rgba(255,61,90,0.1); margin-bottom:1rem;">
           <strong>Transaction ID:</strong> ${txnId}<br>
-          <small style="color:var(--text-muted)">Base Value: ${res.ml_explanation.base_value.toFixed(2)} | Target Value: ${res.ml_explanation.target_value.toFixed(2)}</small>
+          <small style="color:var(--text-muted)">Method: ${res.ml_explanation.method || 'SHAP'}</small>
         </div>
+      `;
+
+      const sc = res.scoring_context || {};
+      if (sc.fraud_probability !== null && sc.fraud_probability !== undefined) {
+        const pct = (Number(sc.fraud_probability) * 100).toFixed(1);
+        const thr = (Number(sc.decision_threshold || 0.7) * 100).toFixed(1);
+        const verdict = sc.flagged_as_fraud
+          ? `Flagged as fraud because score ${pct}% is above threshold ${thr}%.`
+          : `Not flagged as fraud because score ${pct}% is below threshold ${thr}%.`;
+        html += `
+          <div style="padding:.9rem; border-radius:8px; background:rgba(74,158,255,0.08); border:1px solid rgba(74,158,255,0.25); margin-bottom:.8rem;">
+            <div style="font-weight:700; color:var(--text-primary)">${verdict}</div>
+            <div style="font-size:.78rem; color:var(--text-muted); margin-top:4px;">
+              Risk Tier: ${_escapeHtml(sc.risk_tier || 'N/A')} · Probability: ${pct}%
+            </div>
+          </div>
+        `;
+      }
+
+      html += `
         <p style="margin-bottom:0.5rem; color:var(--text-primary)"><strong>Primary Risk Factors:</strong></p>
         <div style="display:flex; flex-direction:column; gap:8px;">
       `;
 
       topFeats.slice(0, 5).forEach(f => {
-        const val = f.value > 0 ? `+${f.value.toFixed(2)}` : f.value.toFixed(2);
-        const color = f.value > 0 ? '#ff8c42' : '#00e676';
+        const shap = Number(f.contribution || 0);
+        const shapText = `${shap >= 0 ? '+' : ''}${shap.toFixed(4)}`;
+        const color = shap >= 0 ? '#ff8c42' : '#00e676';
+        const dir = shap >= 0 ? '↑ increases risk' : '↓ decreases risk';
+        const featVal = Number(f.value);
+        const featValText = Number.isFinite(featVal)
+          ? featVal.toLocaleString('en-IN', { maximumFractionDigits: 4 })
+          : String(f.value ?? 'N/A');
         html += `
           <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(0,0,0,0.2); border-radius:4px; border:1px solid var(--border);">
-            <span style="font-family:monospace; font-size:0.85rem">${f.feature.replace(/_/g, ' ')}</span>
-            <span style="font-weight:700; color:${color}">${val} SHAP</span>
+            <div style="display:flex; flex-direction:column; min-width:0; margin-right:10px;">
+              <span style="font-family:monospace; font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${_escapeHtml((f.feature || '').replace(/_/g, ' '))}</span>
+              <span style="font-size:.72rem; color:var(--text-muted)">feature value: ${_escapeHtml(featValText)}</span>
+            </div>
+            <span style="font-weight:700; color:${color}">${shapText} SHAP · ${dir}</span>
           </div>
         `;
       });
 
       html += `</div>`;
+
+      const narrative = Array.isArray(res.ml_explanation.narrative) ? res.ml_explanation.narrative : [];
+      if (narrative.length) {
+        html += `
+          <p style="margin:.8rem 0 .4rem 0; color:var(--text-primary)"><strong>Why it was flagged:</strong></p>
+          <ul style="margin:0; padding-left:1.1rem; display:grid; gap:.35rem; color:var(--text-muted); font-size:.84rem;">
+            ${narrative.slice(0, 4).map(line => `<li>${_escapeHtml(line)}</li>`).join('')}
+          </ul>
+        `;
+      }
+
       body.innerHTML = html;
     } else if (res && res.error) {
       body.innerHTML = `<div style="color:#ff3d5a; padding:1rem;">Error: ${res.error}</div>`;

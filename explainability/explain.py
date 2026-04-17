@@ -71,6 +71,7 @@ def explain_transaction_ml(features: dict, feature_cols: list) -> dict:
         return {
             "method":      "SHAP",
             "top_factors": contributions[:8],
+            "top_contributors": contributions[:8],
             "narrative":   _build_narrative(contributions[:5]),
         }
     except Exception as e:
@@ -97,6 +98,7 @@ def _fallback_explanation(features: dict, feature_cols: list) -> dict:
     return {
         "method":      "feature_importance",
         "top_factors": contributions[:8],
+        "top_contributors": contributions[:8],
         "narrative":   _build_narrative(contributions[:5]),
     }
 

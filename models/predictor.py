@@ -58,8 +58,9 @@ def predict_single(txn: dict, account_history: pd.DataFrame = None,
     )
     X = np.array([[features.get(col, 0) for col in feature_cols]])
 
+    threshold   = float(metadata.get('decision_threshold', 0.7))
     fraud_prob  = float(model.predict_proba(X)[0][1])
-    fraud_label = int(fraud_prob >= 0.5)
+    fraud_label = int(fraud_prob >= threshold)
 
 
     # Risk tier
@@ -84,6 +85,7 @@ def predict_single(txn: dict, account_history: pd.DataFrame = None,
     return {
         "fraud_probability": round(fraud_prob, 4),
         "fraud_label":       fraud_label,
+        "decision_threshold": round(threshold, 4),
         "risk_tier":         risk_tier,
         "top_features":      [{"feature": k, "contribution": v} for k, v in top_features],
         "raw_features":      features,
@@ -97,13 +99,14 @@ def predict_batch(df: pd.DataFrame) -> pd.DataFrame:
     """
     model, metadata = _load_model()
     feature_cols    = metadata['feature_columns']
+    threshold       = float(metadata.get('decision_threshold', 0.7))
 
     from features.engineering import engineer_features
     df_feat = engineer_features(df)
     X = df_feat[feature_cols].fillna(0)
 
     probs  = model.predict_proba(X)[:, 1]
-    labels = (probs >= 0.5).astype(int)
+    labels = (probs >= threshold).astype(int)
 
     def tier(p):
         if p < 0.3:   return "LOW"
@@ -114,6 +117,7 @@ def predict_batch(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df['fraud_probability'] = probs.round(4)
     df['fraud_label']       = labels
+    df['decision_threshold'] = round(threshold, 4)
     df['risk_tier']         = [tier(p) for p in probs]
     return df
 

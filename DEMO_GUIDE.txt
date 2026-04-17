@@ -1,0 +1,154 @@
+============================================================
+  FUNDFLOW AI — DEMO SCRIPT FOR JUDGES
+  Follow these steps in order. Total demo time: ~8 minutes.
+============================================================
+
+PREPARATION:
+  1. Set your OpenAI API key (for GPT explanation):
+     $env:OPENAI_API_KEY = "sk-your-key-here"
+  2. Start the server:
+     python run.py
+  3. Open browser: http://127.0.0.1:8000
+
+
+DEMO FLOW (IN ORDER):
+============================================================
+
+SCENE 1: COMMAND CENTER (2 min)
+------------------------------------------------------------
+Navigate to: Command Center (default landing page)
+
+SHOW:
+  - KPI tiles: Total transactions, alerts, cases
+  - Charts: fraud distribution, risk breakdown
+
+SAY:
+  "This is our Command Center — a single dashboard view of
+   6.3 million transactions processed through our XGBoost
+   fraud engine. We have 264 active alerts across all risk
+   levels."
+
+THEN: Start the Replay Simulator
+  - Set rate to 50 txn/sec
+  - Click "Start Simulation"
+  - Watch 5-10 transactions appear in the live feed
+  - Point out: red = HIGH/CRITICAL, green = LOW
+  - Click "Why?" on a red transaction to show SHAP modal
+
+SAY:
+  "Each transaction is scored in under 100ms. When I click
+   'Why?', the system shows the exact SHAP feature contributions
+   that caused this flag — this is model explainability."
+
+  - Stop the simulator
+
+
+SCENE 2: PAYMENT GATEWAY SIMULATOR (3 min) ⭐ MAIN EVENT ⭐
+------------------------------------------------------------
+Navigate to: Investigation page
+
+TEST CASE 1 — BLOCK A FRAUDSTER:
+  Sender:   C1953680528
+  Receiver: M9876543210
+  Amount:   48500
+  Type:     UPI
+  Click: "Process Payment"
+
+  EXPECTED: 🚫 TRANSACTION BLOCKED — ~97-100% fraud risk
+
+SAY:
+  "This is our payment gateway interceptor. I'm entering
+   account C1953680528 — which our system flagged earlier.
+   The amount is 48,500 rupees — deliberately just below the
+   50,000 PMLA reporting threshold. Watch..."
+   [wait for result]
+  "Blocked in [X]ms. The model caught the structuring attempt.
+   You can see the SHAP risk factors and the AI-generated
+   explanation below."
+
+TEST CASE 2 — APPROVE A CLEAN TRANSACTION:
+  Sender:   C52913970
+  Receiver: C1234567890
+  Amount:   350
+  Type:     UPI
+  Click: "Process Payment"
+
+  EXPECTED: ✅ TRANSACTION APPROVED — <5% fraud risk
+
+SAY:
+  "Now a legitimate everyday UPI payment — 350 rupees.
+   Approved instantly. The model correctly identifies this
+   as low risk."
+
+
+SCENE 3: FUND FLOW INVESTIGATION (2 min)
+------------------------------------------------------------
+Navigate to: Fund Flow Explorer
+
+  Account ID: C1953680528
+  Click: "Trace Flow"
+
+SAY:
+  "Now let's investigate the account we just blocked.
+   The fund flow graph shows C1953680528 sent money to
+   15 different accounts in 117 minutes. Every single edge
+   is red — 15 out of 15 confirmed fraud. This is the
+   starburst pattern of a smurfing operation."
+
+
+SCENE 4: ACCOUNT RISK PROFILE (1 min)
+------------------------------------------------------------
+Navigate to: Investigation → type C1953680528 → Profile
+
+SAY:
+  "The account risk profile shows 100% max fraud probability,
+   despite having Biometric KYC. This proves our model
+   correctly prioritizes behavioral patterns over identity
+   features. CIBIL score 616, pass-through ratio 0% —
+   this account only sends, never receives. Classic
+   source node in a fraud ring."
+
+
+============================================================
+OPTIONAL: If the judge asks follow-up questions
+============================================================
+
+Q: "Why PaySim dataset?"
+A: "PaySim provides realistic fraud labels from real banking
+    patterns. We don't use PaySim's raw features — we compute
+    49 behavioral features from the transaction graph using our
+    own engineering pipeline."
+
+Q: "Can you explain the features?"
+A: Open features/engineering.py or FEATURE_REFERENCE.md
+
+Q: "Does KYC matter?"
+A: "KYC alone is weak — C1953680528 has biometric KYC and
+    100% fraud probability. KYC only adds value when combined
+    with behavioral anomalies via our kyc_risk_flag feature."
+
+Q: "What about production deployment?"
+A: "Our prototype uses SQLite and NetworkX for zero-dependency
+    deployment. Production would replace these with Kafka for
+    real-time streaming, Redis for feature cache, Neo4j for
+    graph persistence, and PostgreSQL for transaction storage.
+    The XGBoost pipeline stays identical."
+
+Q: "How fast is it?"
+A: "Point at the latency measurement — typically 20-40ms on
+    a laptop. In production with Redis, this drops to <15ms."
+
+
+============================================================
+ACCOUNT IDS FOR QUICK REFERENCE
+============================================================
+FRAUD ACCOUNTS (will trigger BLOCKED):
+  C1953680528  — 16 fraud txns, Rs 3.7L
+  C658156224   — 15 fraud txns, Rs 4.8L
+  C475752253   — 15 fraud txns, Rs 2.1L
+  C1822075577  — 15 fraud txns, Rs 4.9L
+  C1339018937  — 15 fraud txns, Rs 5.6L
+
+CLEAN ACCOUNTS (will show APPROVED):
+  C52913970    — low fraud probability
+  (Any random ID not in DB — defaults to neutral)

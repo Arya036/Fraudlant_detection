@@ -97,6 +97,11 @@ SIMULATION_FRAUD_PROBABILITY = 0.05  # 5% fraud injection in live sim
 # API
 API_HOST = "127.0.0.1"
 API_PORT = 8000
+API_KEY = os.getenv("FUNDFLOW_API_KEY", "dev-local-key-change-me")
+ALLOWED_ORIGINS = os.getenv(
+    "FUNDFLOW_ALLOWED_ORIGINS",
+    "http://127.0.0.1:8000,http://localhost:8000,http://127.0.0.1:5500,http://localhost:5500",
+)
 
 # Base date for timestamp conversion
 BASE_DATE = "2026-03-01"

@@ -3,16 +3,61 @@ FundFlow AI — Bulk Alert Generation
 Scans DB for high-risk transactions and creates alerts.
 Run after update_db_scores.py
 """
-import sqlite3
 import sys
 import os
 import json
-from datetime import datetime
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import DB_PATH
-from alerts.generator import generate_high_risk_alert, create_alert
+from alerts.generator import generate_high_risk_alert
 from ingestion.loader import get_db_connection
+
+
+def _generate_graph_alerts(conn, ring_limit: int = 10, mule_limit: int = 20) -> int:
+    """
+    Generate ring/mule alerts from real scored transactions instead of hardcoded demos.
+    Uses a bounded suspicious subset to keep alert generation fast.
+    """
+    from graph.fund_flow import FundFlowGraph
+    from graph.ring_detector import find_cycles
+    from graph.mule_detector import compute_mule_scores
+    from alerts.generator import generate_ring_alert, generate_mule_alert
+
+    rows = conn.execute("""
+        SELECT txn_id, sender_account, receiver_account, amount,
+               timestamp, is_fraud, txn_type, step,
+               COALESCE(fraud_probability, 0.0) as fraud_probability
+        FROM transactions
+        WHERE COALESCE(fraud_probability, 0) >= 0.6 OR is_fraud = 1
+        ORDER BY timestamp DESC
+        LIMIT 15000
+    """).fetchall()
+
+    if not rows:
+        print("  No suspicious rows available for ring/mule alert generation.")
+        return 0
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    graph = FundFlowGraph().build_from_df(df)
+
+    added = 0
+
+    # Ring alerts from detected graph cycles
+    rings = find_cycles(graph.G, max_length=5, time_window_hours=24)
+    for ring in rings[:ring_limit]:
+        if ring.get('risk_score', 0) >= 0.6:
+            generate_ring_alert(ring, db_conn=conn)
+            added += 1
+
+    # Mule alerts from computed mule scores
+    mule_df = compute_mule_scores(graph.G, df)
+    if len(mule_df) > 0:
+        suspects = mule_df[mule_df['is_suspected_mule'] == 1].head(mule_limit)
+        for _, row in suspects.iterrows():
+            generate_mule_alert(row.to_dict(), db_conn=conn)
+            added += 1
+
+    return added
 
 
 def generate_bulk_alerts(threshold: float = 0.75, limit: int = 200):
@@ -43,46 +88,10 @@ def generate_bulk_alerts(threshold: float = 0.75, limit: int = 200):
         generate_high_risk_alert(txn, risk, db_conn=conn)
         alert_count += 1
 
-    # Add ring alerts (synthetic for demo)
-    rings_demo = [
-        {
-            "ring_id": "RING_0001",
-            "accounts": ["C1231006815", "C422409467", "C553264065"],
-            "ring_size": 3,
-            "total_amount": 750000.0,
-            "time_span_hrs": 1.2,
-            "risk_score": 0.92,
-            "edges": [],
-        },
-        {
-            "ring_id": "RING_0002",
-            "accounts": ["C840083671", "C2083117811", "C1666544295", "C1828508781"],
-            "ring_size": 4,
-            "total_amount": 1250000.0,
-            "time_span_hrs": 2.5,
-            "risk_score": 0.85,
-            "edges": [],
-        },
-    ]
-
-    from alerts.generator import generate_ring_alert
-    for ring in rings_demo:
-        generate_ring_alert(ring, db_conn=conn)
-        alert_count += 1
-
-    # Add mule alert (demo)
-    from alerts.generator import generate_mule_alert
-    mule_demo = {
-        "account": "C_DORMANT_0001",
-        "mule_score": 0.87,
-        "passthrough_ratio": 0.94,
-        "avg_fwd_delay_min": 12.0,
-        "unique_senders": 8,
-        "total_received": 850000.0,
-        "total_sent": 799000.0,
-    }
-    generate_mule_alert(mule_demo, db_conn=conn)
-    alert_count += 1
+    print("Generating graph-derived ring and mule alerts...")
+    graph_alerts = _generate_graph_alerts(conn)
+    alert_count += graph_alerts
+    print(f"  Added {graph_alerts} ring/mule alerts from live graph analysis.")
 
     conn.close()
     print(f"\nGenerated {alert_count} alerts total.")

@@ -7,10 +7,19 @@ It goes beyond standard tabular ML by building an in-memory **Directed Graph** o
 ---
 
 ## 📸 Dashboard Capabilities
-- **Command Center:** Real-time replay simulator testing the model's throughput (< 100ms per inference) with live WebSocket streaming.
+- **Command Center:** Real-time replay simulator with live WebSocket streaming and inline fraud scoring.
 - **Fund Flow Explorer:** 3-hop interactive graph visualization of money movement between suspected accounts.
 - **Mule Network Tracker:** Algorithmic identification of mule accounts based on passing-through volume, account age, and KYC status.
 - **Investigation Workspace:** Deep-dive into specific account risk profiles, simulate RBI Account Aggregator pulls, and manually score single transactions.
+
+---
+
+## ⚠️ Reality Check (Important for Demo)
+- The project is trained on PaySim-derived data plus synthetic augmentation, not real labeled Indian bank data.
+- Fund-flow tracing, ring detection, and mule scoring are computed from transaction graph structure and work on any compatible transaction graph.
+- Account Aggregator pull in the dashboard is simulated UX to demonstrate integration intent.
+- Alert generation is data-driven from scored transactions and graph analysis (not fixed hardcoded ring/mule records).
+- For production fraud probability calibration, retraining on bank-provided labeled historical data is mandatory.
 
 ---
 

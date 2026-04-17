@@ -25,8 +25,16 @@ function connectWebSocket() {
         const msg = JSON.parse(event.data);
         if (msg.type === 'transaction' && !feedPaused) {
           appendFeedItem(msg.data);
+          // ⚡ Live KPI tick — increment total; fraud/alert if HIGH+
+          const tier = msg.data.risk_tier || 'LOW';
+          liveIncrementKPI(tier, false);
           // Update simulator counters if running
           if (typeof updateSimCounters === 'function') updateSimCounters(msg.data);
+        } else if (msg.type === 'alert' && !feedPaused) {
+          appendAlertFeedItem(msg.data);
+          // ⚡ Live KPI tick for alert — also pulses the badge
+          const tier = msg.data.severity || 'HIGH';
+          liveIncrementKPI(tier, true);
         }
       } catch (e) {
         console.warn('WS parse error:', e);
@@ -101,6 +109,37 @@ function appendFeedItem(txn) {
   feed.insertBefore(item, feed.firstChild);
   feedItems++;
 
+  if (feedItems > MAX_FEED) {
+    feed.lastChild && feed.removeChild(feed.lastChild);
+    feedItems--;
+  }
+}
+
+function appendAlertFeedItem(alert) {
+  const feed = document.getElementById('live-feed');
+  if (!feed) return;
+
+  const item = document.createElement('div');
+  item.className = 'feed-item';
+  item.style.borderColor = 'rgba(255,61,90,0.45)';
+  item.style.background = 'rgba(255,61,90,0.08)';
+
+  const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString('en-IN') : '--:--';
+  const sev = alert.severity || 'HIGH';
+  const type = String(alert.alert_type || 'HIGH_RISK_TRANSACTION').replace(/_/g, ' ');
+  const amt = Number(alert.total_amount || 0);
+
+  item.innerHTML = `
+    <span class="feed-time">${ts}</span>
+    <span style="font-weight:700;color:#ff3d5a">🚨 LIVE ALERT</span>
+    <span style="color:#ff8c42;font-weight:600">${sev}</span>
+    <span style="color:var(--text-primary)">${type}</span>
+    <span class="feed-amount">₹${Math.round(amt).toLocaleString('en-IN')}</span>
+    <span style="font-size:.72rem;color:var(--text-muted)">${alert.alert_id || ''}</span>
+    <span></span>`;
+
+  feed.insertBefore(item, feed.firstChild);
+  feedItems++;
   if (feedItems > MAX_FEED) {
     feed.lastChild && feed.removeChild(feed.lastChild);
     feedItems--;

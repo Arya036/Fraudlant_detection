@@ -1,0 +1,11 @@
+scenario,sender_account,receiver_account,amount,txn_type,expected_decision,description
+1_known_fraudster,C1953680528,M9876543210,48500,UPI,BLOCKED,"Known fraud account with 16 prior fraud txns + near 50k structuring threshold"
+2_clean_salary,C52913970,C1234567890,25000,NEFT,APPROVED,"Clean account with normal transaction history"
+3_structuring_100k,C658156224,M5555555555,98000,NEFT,BLOCKED,"Near 1 lakh threshold — structuring attempt under PMLA"
+4_night_large_upi,C1822075577,M7777777777,75000,UPI,BLOCKED,"High-risk: night-time + large UPI + known fraud sender"
+5_small_upi,C52913970,C9999999999,350,UPI,APPROVED,"Everyday small UPI — no risk signals"
+6_round_amount,C1339018937,M1111111111,50000,IMPS,BLOCKED,"Exact round 50k + known fraud sender"
+7_unknown_sender,XYZTEST001,M2222222222,15000,UPI,APPROVED,"Unknown sender — no history — defaults to neutral"
+8_high_velocity_sender,C475752253,M3333333333,22000,UPI,BLOCKED,"Known high-velocity fraud sender with 15 prior fraud txns"
+9_cross_bank_large,C832102131,M4444444444,95000,UPI,BLOCKED,"Cross-bank UPI near 1L threshold + known fraud account"
+10_moderate_risk,C835808000,M6666666666,8500,NEFT,FLAGGED,"Known fraud sender but small amount — may score in FLAGGED zone"

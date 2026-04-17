@@ -79,10 +79,14 @@
         <option value="5">5 tx / sec</option>
         <option value="10">10 tx / sec</option>
       </select>
+      <label style="display:flex;align-items:center;gap:.35rem;font-size:.78rem;color:var(--text-muted)">
+        <input id="sim-live-alerts" type="checkbox" checked /> Live alerts
+      </label>
       <button class="btn btn-primary" id="btn-sim-toggle" onclick="toggleSimulator()" style="padding:.4rem 1.1rem;font-size:.8rem">▶ Start Replay</button>
       <div style="display:flex;gap:1.5rem;font-size:.8rem;margin-left:.5rem">
         <span>Scored: <strong id="sim-count" style="color:#4a9eff">0</strong></span>
         <span>Fraud flagged: <strong id="sim-fraud" style="color:#ff3d5a">0</strong></span>
+        <span>Live alerts: <strong id="sim-live-alert-count" style="color:#ff8c42">0</strong></span>
         <span id="sim-latency" style="color:var(--text-muted)"></span>
       </div>
     </div>
@@ -286,28 +290,91 @@
       <div id="account-profile-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1.25rem;padding:1.25rem"></div>
     </div>
 
-    <!-- Manual Transaction Scorer -->
-    <div class="card" style="margin-bottom: 1.5rem">
+    <!-- Payment Gateway Simulator -->
+    <div class="card gateway-card" style="margin-bottom: 1.5rem">
       <div class="card-header">
-        <h2>⚡ Live Transaction Scorer</h2>
+        <h2>🛡️ Payment Gateway Simulator</h2>
+        <span class="badge-tag" style="background:#6c63ff22;color:#6c63ff;font-size:0.7rem;padding:2px 8px;border-radius:10px;">PRE-EMPTIVE</span>
       </div>
       <div style="padding: 1.25rem;">
-        <form id="form-manual-score" style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end;">
-          <div style="flex:1; min-width:200px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Sender Account</label><input type="text" id="man-sender" class="input-field" placeholder="e.g. C1953680528" required style="width:100%"></div>
-          <div style="flex:1; min-width:200px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Receiver Account</label><input type="text" id="man-receiver" class="input-field" placeholder="e.g. M123456" required style="width:100%"></div>
-          <div style="flex:1; min-width:150px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Amount (₹)</label><input type="number" id="man-amount" class="input-field" placeholder="25000" required style="width:100%"></div>
-          <div style="flex:1; min-width:150px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Txn Type</label>
-            <select id="man-type" class="select-field" style="width:100%">
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 1rem 0">
+          Simulates real-time payment interception — scores before settlement.
+        </p>
+        <form id="form-gateway" style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end;">
+          <div style="flex:1; min-width:200px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Sender Account</label><input type="text" id="gw-sender" class="input-field" placeholder="e.g. C1953680528" required style="width:100%"></div>
+          <div style="flex:1; min-width:200px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Receiver Account</label><input type="text" id="gw-receiver" class="input-field" placeholder="e.g. M9876543210" required style="width:100%"></div>
+          <div style="flex:1; min-width:150px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Amount (₹)</label><input type="number" id="gw-amount" class="input-field" placeholder="48500" required style="width:100%"></div>
+          <div style="flex:1; min-width:150px;"><label class="input-label" style="display:block;margin-bottom:4px;font-size:.8rem;color:var(--text-muted)">Payment Rail</label>
+            <select id="gw-type" class="select-field" style="width:100%">
               <option value="UPI">UPI</option>
               <option value="NEFT">NEFT</option>
               <option value="IMPS">IMPS</option>
               <option value="RTGS">RTGS</option>
-              <option value="TRANSFER">TRANSFER</option>
             </select>
           </div>
-          <div><button type="button" class="btn btn-primary" onclick="scoreManualTxn()" style="height:36px;padding:0 1.5rem">Score Now</button></div>
+          <div><button type="button" class="btn btn-primary gw-process-btn" onclick="processGatewayPayment()" style="height:36px;padding:0 1.5rem;position:relative;overflow:hidden">
+            <span class="gw-btn-text">⚡ Process Payment</span>
+          </button></div>
         </form>
-        <div id="man-score-result" style="margin-top: 1rem; display: none; padding: 1rem; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border);"></div>
+
+        <!-- Gateway Result Area -->
+        <div id="gw-processing" style="display:none;text-align:center;padding:2rem;margin-top:1.25rem;">
+          <div class="gw-spinner"></div>
+          <p style="color:var(--text-muted);margin-top:1rem;font-size:0.9rem">Routing through fraud detection engine...</p>
+        </div>
+
+        <div id="gw-result" style="display:none;margin-top:1.25rem;border-radius:12px;overflow:hidden;"></div>
+      </div>
+    </div>
+
+    <!-- Upload + Column Mapping -->
+    <div class="card" style="margin-bottom: 1.5rem">
+      <div class="card-header">
+        <h2>📤 Upload Transactions (Column Mapping)</h2>
+      </div>
+      <div style="padding:1.25rem;display:grid;gap:1rem">
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center">
+          <input id="upload-file" type="file" class="input-field" accept=".csv,.json" style="min-width:280px" />
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--text-muted)">
+            <input id="upload-score" type="checkbox" checked /> Score
+          </label>
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--text-muted)">
+            <input id="upload-persist" type="checkbox" /> Persist
+          </label>
+          <button class="btn-secondary" onclick="prepareUploadMapping()">Detect Columns</button>
+          <button class="btn-primary" onclick="uploadMappedTransactions()">Upload</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem">
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Sender (required)</label>
+            <select id="upload-map-sender" class="select-field" style="width:100%"></select>
+          </div>
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Receiver (required)</label>
+            <select id="upload-map-receiver" class="select-field" style="width:100%"></select>
+          </div>
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Amount (required)</label>
+            <select id="upload-map-amount" class="select-field" style="width:100%"></select>
+          </div>
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Timestamp (optional)</label>
+            <select id="upload-map-timestamp" class="select-field" style="width:100%"></select>
+          </div>
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Txn Type (optional)</label>
+            <select id="upload-map-txn-type" class="select-field" style="width:100%"></select>
+          </div>
+          <div>
+            <label class="input-label" style="display:block;margin-bottom:4px;font-size:.78rem;color:var(--text-muted)">Channel (optional)</label>
+            <select id="upload-map-channel" class="select-field" style="width:100%"></select>
+          </div>
+        </div>
+
+        <div id="upload-result" style="padding:.9rem;border-radius:8px;background:rgba(74,158,255,0.06);border:1px solid rgba(74,158,255,0.2);font-size:.8rem;color:var(--text-muted)">
+          Select a CSV or JSON file, detect columns, then upload.
+        </div>
       </div>
     </div>
 
@@ -410,9 +477,26 @@
   </div>
 </div>
 
-<script src="js/app.js?v=5"></script>
+<!-- ── ALERT DETAIL PANEL ──────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="alert-detail-overlay" style="display:none" onclick="closeAlertPanel(event)">
+  <div class="alert-detail-panel" id="alert-detail-panel">
+    <div class="adp-header">
+      <div>
+        <span class="adp-severity-tag" id="adp-severity-tag">HIGH</span>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin:4px 0 0 0">Alert details, ML explanation, and AI analysis</p>
+      </div>
+      <button class="modal-close" onclick="document.getElementById('alert-detail-overlay').style.display='none'">✕</button>
+    </div>
+
+    <div class="adp-body" id="adp-body">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js?v=8"></script>
 <script src="js/charts.js?v=4"></script>
 <script src="js/graph.js?v=4"></script>
-<script src="js/websocket.js?v=4"></script>
+<script src="js/websocket.js?v=6"></script>
 </body>
 </html>

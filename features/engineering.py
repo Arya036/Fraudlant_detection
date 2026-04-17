@@ -87,20 +87,29 @@ def engineer_features(df: pd.DataFrame,
     ).astype(int)
     df.drop(columns=['_sender_bank', '_receiver_bank'], inplace=True)
 
-    # ── RECEIVER & SENDER AGGREGATE STATS (fast groupby, not rolling) ─────────
-    recv_counts = (
-        df.groupby('receiver_account').size()
-          .reset_index(name='receiver_total_recv_count')
-    )
-    df = df.merge(recv_counts, on='receiver_account', how='left')
-    df['receiver_total_recv_count'] = df['receiver_total_recv_count'].fillna(1)
+    # ── RECEIVER & SENDER AGGREGATE STATS (causal, up to current tx) ──────────
+    causal_df = df[['txn_id', 'sender_account', 'receiver_account', 'timestamp']].copy()
+    causal_df = causal_df.sort_values('timestamp')
 
-    sender_uniq = (
-        df.groupby('sender_account')['receiver_account']
-          .nunique()
-          .reset_index(name='sender_total_unique_receivers')
+    # Count of receives up to and including current transaction
+    causal_df['receiver_total_recv_count'] = (
+        causal_df.groupby('receiver_account').cumcount() + 1
     )
-    df = df.merge(sender_uniq, on='sender_account', how='left')
+
+    # Running unique receivers seen by a sender up to current transaction
+    causal_df['is_new_sender_receiver_pair'] = (
+        ~causal_df.duplicated(subset=['sender_account', 'receiver_account'])
+    ).astype(int)
+    causal_df['sender_total_unique_receivers'] = (
+        causal_df.groupby('sender_account')['is_new_sender_receiver_pair'].cumsum()
+    )
+
+    df = df.merge(
+        causal_df[['txn_id', 'receiver_total_recv_count', 'sender_total_unique_receivers']],
+        on='txn_id',
+        how='left',
+    )
+    df['receiver_total_recv_count'] = df['receiver_total_recv_count'].fillna(1)
     df['sender_total_unique_receivers'] = df['sender_total_unique_receivers'].fillna(1)
 
     # ── ROLLING TIME-WINDOW FEATURES (vectorised) ─────────────────────────────
