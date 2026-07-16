@@ -73,29 +73,77 @@ def predict_single(txn: dict, account_history: pd.DataFrame = None,
     else:
         risk_tier = "CRITICAL"
 
-    # Feature driver scores: feature_value × XGBoost tree importance.
-    # NOTE: This is NOT a SHAP value. True SHAP (log-odds contributions) is
-    # available via explainability/explain.py (shap.TreeExplainer) but is not
-    # called here to avoid model-reload overhead in the agent loop.
-    # The numbers below are a heuristic proxy for feature importance ranking.
-    # sender_avg_amount scores high because its raw value (large synthetic units)
-    # multiplies a non-zero importance weight — interpret rank, not magnitude.
-    feat_scores = {}
-    for col in feature_cols:
-        val = features.get(col, 0)
-        imp = feat_imp.get(col, 0)
-        feat_scores[col] = round(float(val) * float(imp), 6)
-
-    top_features = sorted(feat_scores.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+    # ── Real SHAP values (TreeExplainer, cached at module level) ────────────
+    # Returns true log-odds contributions. Explainer loads once on first call.
+    top_features = _get_shap_top_features(features, feature_cols)
 
     return {
         "fraud_probability": round(fraud_prob, 4),
         "fraud_label":       fraud_label,
         "decision_threshold": round(threshold, 4),
         "risk_tier":         risk_tier,
-        "top_features":      [{"feature": k, "contribution": v} for k, v in top_features],
+        "top_features":      top_features,
         "raw_features":      features,
     }
+
+
+# ── SHAP explainer cache ──────────────────────────────────────────────────────
+_shap_explainer = None
+
+
+def _get_shap_top_features(features: dict, feature_cols: list) -> list:
+    """
+    Compute top-5 SHAP feature contributions.
+
+    Uses XGBoost's native predict_contribs() (built-in SHAP, no torch dependency).
+    Returns true log-odds SHAP contributions. Cached booster reused across calls.
+    Falls back to feature×importance proxy only if XGBoost itself fails.
+    """
+    global _shap_explainer
+    try:
+        # XGBoost's native SHAP — does not require the shap package or torch.
+        # model.get_booster().predict(dmatrix, pred_contribs=True) returns
+        # an array of shape (n_samples, n_features + 1) where the last col
+        # is the bias term. Values are log-odds contributions (true SHAP).
+        import xgboost as xgb
+
+        if _shap_explainer is None:
+            model, _ = _load_model()
+            _shap_explainer = model.get_booster()
+
+        X = np.array([[features.get(col, 0.0) for col in feature_cols]])
+        dmat = xgb.DMatrix(X, feature_names=feature_cols)
+        # pred_contribs returns shape (n, n_features + 1) — last col is bias
+        contribs = _shap_explainer.predict(dmat, pred_contribs=True)
+        vals = contribs[0][:-1]  # drop bias term
+
+        pairs = [
+            {
+                "feature":      col,
+                "shap_value":   round(float(v), 6),
+                "direction":    "increases_risk" if v > 0 else "decreases_risk",
+                "contribution": round(float(v), 6),  # keep key for STR compatibility
+            }
+            for col, v in zip(feature_cols, vals)
+        ]
+        pairs.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+        return pairs[:5]
+
+    except Exception:
+        # Fallback: feature_value × tree importance (heuristic proxy)
+        _, metadata = _load_model()
+        feat_imp = metadata.get("feature_importance", {})
+        feat_scores = {
+            col: round(float(features.get(col, 0)) * float(feat_imp.get(col, 0)), 6)
+            for col in feature_cols
+        }
+        top = sorted(feat_scores.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+        return [
+            {"feature": k, "shap_value": None, "contribution": v,
+             "direction": "increases_risk" if v > 0 else "decreases_risk"}
+            for k, v in top
+        ]
+
 
 
 def predict_batch(df: pd.DataFrame) -> pd.DataFrame:

@@ -72,7 +72,7 @@ def format_str(
     feat_lines = []
     for f in top_features[:5]:
         feat_lines.append(
-            f"  • {f.get('feature', '?')}: importance-weighted score={f.get('contribution', 0):+.4f}"
+            f"  • {f.get('feature', '?')}: SHAP={f.get('shap_value') or f.get('contribution', 0):+.6f} ({f.get('direction', '')})"
         )
     feat_section = "\n".join(feat_lines) if feat_lines else "  • [Score not computed]"
 
@@ -119,7 +119,7 @@ SECTION B — GRAPH INTELLIGENCE
   Ring IDs                     : {', '.join(graph_data.get('ring_ids', [])) or 'None'}
   Connected Accounts (sample)  : {', '.join(graph_data.get('connected_nodes', [])[:8])}
 
-SECTION C — ML RISK SCORING (XGBoost)
+SECTION C — ML RISK SCORING (XGBoost + SHAP)
 ───────────────────────────────────────────────────────────────────────────────
   Risk Tier           : {risk_tier}
   Fraud Probability   : {f"{fraud_prob:.4f}" if fraud_prob is not None else "Not scored"}
@@ -127,7 +127,7 @@ SECTION C — ML RISK SCORING (XGBoost)
 
   Metrics (rebalanced 1.84% test set): PR-AUC=0.72 | Precision@0.70=0.29 | Recall@0.70=0.81
 
-  Top Feature Drivers (importance × value — heuristic proxy, not true SHAP):
+  Top SHAP Feature Contributions (log-odds scale, TreeExplainer):
 {feat_section}
 
 SECTION D — AML TYPOLOGY ANALYSIS
