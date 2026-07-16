@@ -1,0 +1,38 @@
+# ============================================================
+# Sentinel AI — PS6 Requirements
+# ============================================================
+# Existing FundFlow dependencies (keep as-is)
+fastapi>=0.111.0          # 0.110 has Starlette 1.x incompatibility
+uvicorn[standard]>=0.29.0  # [standard] includes websockets + watchfiles
+pandas==2.2.0
+numpy==1.26.3
+scikit-learn==1.4.0
+xgboost==2.0.3
+networkx==3.2.1
+shap==0.44.1
+joblib==1.3.2
+python-multipart==0.0.6
+aiofiles==23.2.1
+
+# NEW — Agent + RAG (PART A)
+langchain>=0.2.0
+langchain-openai>=0.1.0
+langgraph>=0.1.0
+openai>=1.30.0
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+pdfplumber>=0.10.0         # PDF text extraction with page numbers
+pypdf>=4.0.0
+tiktoken>=0.7.0
+
+# NEW — Streamlit console (PART A)
+streamlit>=1.35.0
+plotly>=5.20.0
+
+# NEW — Utilities
+python-dotenv>=1.0.0
+structlog>=24.0.0
+ruff>=0.4.0
+
+# PART B — Eval
+# ragas>=0.1.7

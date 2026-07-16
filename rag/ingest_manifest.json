@@ -1,0 +1,10 @@
+{
+  "total_chunks": 1088,
+  "sources": [
+    "sar_tti_01",
+    "fatf-recommendations-2012",
+    "AnnualReport_27122024",
+    "MD18KYCF6E92C82E1E1419D87323E3869BC9F13"
+  ],
+  "vector_store_path": "./rag/vector_store"
+}
