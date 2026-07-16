@@ -1,32 +1,35 @@
 # Sentinel AI — Technical Implementation Reference
-### How Everything Was Built — From FundFlow to FastAPI
+### How Everything Was Built
 
 ---
 
 ## 1. System Overview
 
-Sentinel AI is composed of two layers:
+Sentinel AI was built in two phases on top of a common codebase:
 
-- **Layer 1 — FundFlow Engine** (pre-existing fraud detection system):
-  An ML-powered transaction risk scorer and network analyser built on SQLite, XGBoost, and NetworkX.
+- **Phase 1 — FundFlow ML Foundation** (the ML backbone we built):
+  A production-grade fraud detection engine covering data ingestion, SQLite schema design,
+  49-feature engineering, XGBoost model training, NetworkX graph construction, SHAP explainability,
+  and alert generation. All built from scratch on the PaySim synthetic dataset.
 
-- **Layer 2 — Sentinel AI** (built for PS6):
-  An agentic AML investigator that wraps the FundFlow engine with a LangGraph ReAct loop,
-  a regulatory RAG pipeline, an STR formatter, guardrails, and a FastAPI backend.
+- **Phase 2 — Sentinel AI Agentic Layer** (built for PS6):
+  An autonomous AML investigator that wires the FundFlow tools into a LangGraph ReAct loop,
+  adds a regulatory RAG pipeline (ChromaDB + real regulatory PDFs), an STR draft generator
+  aligned to FIU-IND/PMLA format, a guardrails system, and a FastAPI backend.
 
 ```
 React Frontend
       │
       ▼
-FastAPI (api/main.py)           ← Layer 2: Sentinel AI
+FastAPI (api/main.py)           ← Phase 2: Sentinel AI
       │
       ├──► LangGraph ReAct Agent (orchestrator.py)
       │          │
-      │     Tool 1: get_transaction_history  ──► SQLite (fundflow.db)   ← Layer 1: FundFlow
-      │     Tool 2: get_transaction_graph    ──► NetworkX ego-subgraph   ← Layer 1: FundFlow
-      │     Tool 3: score_risk              ──► XGBoost model            ← Layer 1: FundFlow
-      │     Tool 4: search_regulations      ──► ChromaDB RAG             ← Layer 2: Sentinel AI
-      │     Tool 5: detect_typology         ──► Pattern rules + graph    ← hybrid
+      │     Tool 1: get_transaction_history  ──► SQLite (fundflow.db)   ← Phase 1: FundFlow
+      │     Tool 2: get_transaction_graph    ──► NetworkX ego-subgraph   ← Phase 1: FundFlow
+      │     Tool 3: score_risk              ──► XGBoost + SHAP          ← Phase 1: FundFlow
+      │     Tool 4: search_regulations      ──► ChromaDB RAG             ← Phase 2: Sentinel AI
+      │     Tool 5: detect_typology         ──► Pattern rules + graph    ← Phase 1+2: hybrid
       │          │
       │     str_generator.py → guardrails.py → Draft STR
       │
@@ -40,7 +43,35 @@ Streamlit Console (console/app.py)  ← fallback UI, same Python backend
 
 ---
 
-## 2. FundFlow Engine (Layer 1)
+## 2. FundFlow ML Foundation — What We Built
+
+FundFlow is the ML backbone we built to power Sentinel AI's tools. It covers
+the full stack from raw CSV ingestion to a trained XGBoost model, graph engine,
+and alert generation.
+
+### 2.0 Data Pipeline — `ingestion/loader.py`
+
+Starting point: the PaySim synthetic dataset (499,196 transactions, ~0.13% fraud rate).
+
+**What we built:**
+1. CSV parser and cleaner — handles PaySim column naming, converts timestamps
+2. **Type remapping** — PaySim uses African mobile-money types (CASH_IN/CASH_OUT/TRANSFER).
+   We mapped these to Indian banking conventions:
+   ```
+   TRANSFER → UPI / NEFT / IMPS  (randomly assigned by amount tier)
+   CASH_OUT → ATM
+   CASH_IN  → DEPOSIT
+   PAYMENT  → UPI (small amount)
+   ```
+   Fraud labels come from PaySim's original `isFraud` column — the type remapping
+   does not affect which transactions are labelled fraud.
+3. **Class rebalancing** — 0.13% → 1.84% fraud rate via stratified undersampling of
+   legitimate transactions. `scale_pos_weight=53.28` compensates in the XGBoost training objective.
+4. SQLite schema creation and bulk insert of all 499,196 rows into `fundflow.db`.
+5. Batch inference pass: runs XGBoost on all transactions and writes `fraud_probability`
+   and `risk_tier` back into the `transactions` table.
+6. Alert generation: applies rule-based + ML thresholds to identify suspicious patterns
+   and writes them to the `alerts` table.
 
 ### 2.1 Database — `fundflow.db`
 
@@ -88,20 +119,63 @@ CREATE TABLE alerts (
 
 ### 2.2 Feature Engineering — `features/engineering.py`
 
-Computes ~30 features per transaction from raw data + account history:
+We designed and implemented 49 features across 6 categories. All features are computed
+causally (no future leakage — rolling windows use only past rows).
 
-| Feature | Type | Description |
-|---|---|---|
-| `amount` | numeric | Raw transaction amount |
-| `amount_log` | numeric | log1p(amount) — normalises skewed distribution |
-| `type_ATM`, `type_UPI`, etc. | binary | One-hot encoded txn_type |
-| `channel_mobile`, etc. | binary | One-hot encoded channel |
-| `is_night` | binary | 1 if timestamp hour is 22–06 |
-| `sender_avg_amount` | numeric | Mean amount sent by this account historically |
-| `sender_unique_receivers_1h` | numeric | Unique receivers in past 1 hour |
-| `sender_txn_count_7d` | numeric | Transaction count in past 7 days |
-| `sender_fraud_rate_hist` | numeric | Historical fraud rate for this account |
-| `amount_vs_avg_ratio` | numeric | This amount / sender_avg_amount |
+**Category 1: Transaction-level (6 features)**
+| Feature | Description |
+|---|---|
+| `amount_log` | `log1p(amount)` — normalises the heavy right tail |
+| `hour_of_day`, `day_of_week` | Time signals |
+| `is_weekend`, `is_night` | Binary time flags (night = midnight–6am) |
+| `is_cross_branch` | Sender and receiver in different branches |
+
+**Category 2: Amount tier + transaction type (8 features)**
+| Feature | Description |
+|---|---|
+| `amount_bucket` | 5-tier (0=everyday UPI <₹500, 4=RTGS >₹1L) |
+| `type_NEFT/UPI/ATM/DEPOSIT/IMPS` | One-hot encoded transaction type |
+| `channel_mobile`, `channel_internet` | Channel one-hot |
+
+**Category 3: New receiver + cross-bank UPI (3 features)**
+| Feature | Description |
+|---|---|
+| `is_new_receiver` | First time this sender has sent to this receiver (causal) |
+| `is_cross_bank_upi` | UPI between two different simulated bank handles |
+| `upi_new_recv_risk` | UPI + new receiver + amount > ₹10K (composite risk signal) |
+
+**Category 4: Rolling velocity windows (8 features)**
+| Feature | Description |
+|---|---|
+| `sender_txn_count_1h/24h` | Transaction count in rolling 1h/24h window |
+| `sender_avg_amount` | Expanding mean of sender's past amounts (no leakage) |
+| `sender_std_amount` | Expanding std dev of sender's past amounts |
+| `amount_deviation` | (amount − mean) / std, clipped [−10, 10] |
+| `sender_unique_receivers_1h` | Unique receivers in last 1 hour |
+| `time_since_last_txn_min` | Minutes since sender's previous transaction |
+| `hour_velocity_ratio` | 1h rate vs 24h baseline (burst signal) |
+
+**Category 5: Rule-based AML signals (10 features)**
+
+Designed to flag structuring, velocity bursts, and round-number patterns regardless of ML.
+
+| Feature | AML Pattern |
+|---|---|
+| `near_50k/100k/1m_threshold` | Amount just below reporting threshold (structuring) |
+| `near_any_threshold` | OR of the above |
+| `is_round_10k`, `is_round_1k` | Round-number detection (layering indicator) |
+| `high_velocity_1h/24h` | ≥5 txns/hour or ≥20 txns/day (burst) |
+| `rapid_succession` | Last transaction < 5 min ago |
+| `amount_gt_5x_avg` | Current amount > 5× sender's historical average |
+
+**Category 6: India-specific features (2 features)**
+| Feature | Signal |
+|---|---|
+| `kyc_risk_flag` | OTP-only eKYC + account age < 90 days (mule onboarding proxy) |
+| `cibil_high_txn_flag` | Credit score < 550 + large transfer (high-risk customer) |
+
+*Graph features (sender/receiver mule score, passthrough ratio, ring membership) are computed
+separately in `graph/` and joined as an additional 11 features — documented in section 2.4.*
 
 ---
 
@@ -192,18 +266,19 @@ Computes a mule score (0.0–1.0) based on:
 Finds circular fund flows using `networkx.simple_cycles()` on the ego-subgraph.
 Bounded to ego-subgraph (not full 499K-node graph) to stay fast.
 
-#### Critical fix applied: SQL ego-subgraph (not global slice)
-The original FundFlow code pre-loaded 10,000 transactions into a global NetworkX graph.
-This silently returned empty results for any account not in that 10K slice.
+#### Design decision: SQL ego-subgraph (not in-memory global graph)
+The initial implementation pre-loaded a fixed slice of transactions into a single global
+NetworkX graph. This silently returned empty results for any account outside that slice.
 
-**Fix:** Every `get_transaction_graph` call now builds the subgraph via SQL:
+**Redesigned approach:** Every `get_transaction_graph` call builds its own subgraph via SQL:
 ```python
 # Step 1: all transactions where subject is sender or receiver
 # Step 2: get all 1-hop counterparties
 # Step 3: query up to 3000 transactions among those counterparties
 # Step 4: build NetworkX from the combined result
 ```
-This guarantees correctness for any account in the 499K-transaction database.
+This guarantees correctness for any of the 499K accounts in the database.
+
 
 ---
 
@@ -213,7 +288,7 @@ into a final risk assessment. Used as part of the STR evidence.
 
 ---
 
-## 3. Sentinel AI Agent Layer (Layer 2)
+## 3. Sentinel AI Agent Layer (Phase 2)
 
 ### 3.1 Agentic Orchestrator — `agent/orchestrator.py`
 

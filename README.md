@@ -66,10 +66,11 @@ A compliance analyst enters one account ID. The AI agent takes over: it queries 
 - **5 specialised tools** that the agent chains autonomously
 - **Guardrails system** — enforces minimum tool calls, requires regulatory citation before STR generation, flags uncited regulatory claims (hallucination detection)
 
-### Fund Flow Graph Engine (FundFlow, reused)
-- SQL-built ego-subgraph: queries the full database for every account's 2-hop neighbourhood — never pre-truncated, always correct regardless of account position
-- Mule account scoring (passthrough ratio, fan-out ratio)
-- Ring/circular fund flow detection on bounded ego-subgraph (fast, not exponential)
+### Fund Flow Graph Engine
+- Built a SQL-first ego-subgraph construction that queries the full 499K-transaction database for every account's 2-hop neighbourhood — never pre-truncated, always correct regardless of account position
+- Mule account scoring algorithm: passthrough ratio + fan-out ratio → `mule_score` (0.0–1.0)
+- Ring/circular fund flow detection using `networkx.simple_cycles()` on bounded ego-subgraph (fast, not exponential)
+- Full NetworkX DiGraph construction with weighted edges (transaction amount) and node risk attributes
 
 ### ML Risk Scoring
 - XGBoost model trained on PaySim synthetic dataset
@@ -115,11 +116,11 @@ e:\PS6\
 ├── console/
 │   └── app.py              # Streamlit 4-tab investigation console
 │
-├── models/                 # FundFlow XGBoost model (reused)
-├── graph/                  # FundFlow graph engine (reused)
-├── features/               # Feature engineering pipeline (reused)
-├── explainability/         # SHAP explainability (reused)
-├── scoring/                # Composite risk engine (reused)
+├── models/                 # XGBoost fraud model (trained by us on PaySim)
+├── graph/                  # Fund flow graph engine (NetworkX)
+├── features/               # 49-feature engineering pipeline
+├── explainability/         # SHAP via XGBoost native predict_contribs
+├── scoring/                # Composite risk + alert engine
 │
 ├── run_ps6.py              # Startup script (--ingest / --console)
 ├── test_agent.py           # End-to-end agent test
@@ -233,15 +234,28 @@ All accounts below are CRITICAL tier with multiple fraud-flagged transactions:
 
 ---
 
-## Built On (FundFlow Engine)
+## How We Built It
 
-This project is built on top of **FundFlow AI**, a pre-existing fraud detection system providing:
-- XGBoost fraud scoring pipeline
-- NetworkX-based fund flow graph engine
-- Mule account and ring detection algorithms
-- SHAP explainability layer
+Sentinel AI was built in two phases:
 
-Sentinel AI adds the agentic orchestration, RAG regulatory corpus, STR generation, and Streamlit console on top of this engine.
+### Phase 1 — ML Foundation (FundFlow)
+We built a complete transaction fraud detection stack from scratch:
+- **Data pipeline:** Downloaded the PaySim synthetic dataset, designed `ingestion/loader.py` to parse, clean, and map PaySim's transaction types to Indian banking conventions (UPI/NEFT/ATM/IMPS). Built the SQLite schema and loaded 499,196 transactions.
+- **Feature engineering:** Implemented 49 features across 6 categories in `features/engineering.py` — transaction-level signals, rolling time-window velocity (1h/24h), new-receiver flags, cross-bank UPI detection, structuring threshold proximity, graph-derived signals (mule score, passthrough ratio), and India-specific features (KYC risk tier, CIBIL credit flag).
+- **Model training:** Trained an XGBoost binary classifier (`models/trainer.py`) with `scale_pos_weight=53.28` to handle class imbalance, using `eval_metric=aucpr` (chosen over AUC specifically because of imbalance). Achieved PR-AUC=0.72, Recall=0.82 at threshold 0.70.
+- **Graph engine:** Built `graph/fund_flow.py` (NetworkX DiGraph), `graph/mule_detector.py` (passthrough + fan-out ratio algorithm), and `graph/ring_detector.py` (ego-bounded simple-cycles). Solved the performance problem by constructing ego-subgraphs via SQL rather than loading the full 499K graph into memory.
+- **SHAP explainability:** Integrated XGBoost's native `predict_contribs()` (true log-odds SHAP values per feature, no external shap package needed) via `models/predictor.py`. Values are in the correct ±0.1 to ±3 log-odds range.
+- **Alert generation:** Built `scoring/composite.py` to apply rule-based + ML thresholds and write structured alerts to the SQLite `alerts` table.
+
+### Phase 2 — Agentic Investigation Layer (Sentinel AI)
+Built on top of the ML foundation:
+- **LangGraph ReAct agent** — orchestrates the 5 tools autonomously using GPT-4o-mini function-calling. Tool order is not hardcoded; the LLM decides based on what each tool returns.
+- **Regulatory RAG** — ingested 4 real regulatory PDFs (1,088 chunks) into ChromaDB. Built `rag/retriever.py` with source→display-name mapping for clean citations in STRs.
+- **STR generator** — formats all tool evidence into a 6-section draft STR aligned to FIU-IND/RBI/PMLA structure.
+- **Guardrail system** — enforces citation requirements and minimum evidence before STR generation (G1–G4).
+- **FastAPI backend** — async investigation endpoint with job polling, graph endpoint, RAG search, and alerts API for the React frontend.
+- **Streamlit console** — 4-tab investigation UI for demo and fallback.
+
 
 ---
 
