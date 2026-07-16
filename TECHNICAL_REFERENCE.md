@@ -110,27 +110,62 @@ Computes ~30 features per transaction from raw data + account history:
 **Training data:** PaySim synthetic transactions (rebalanced — original ~0.13% fraud rate → 1.84%).
 
 **Architecture:**
-- XGBoost binary classifier
-- Input: ~30 engineered features
-- Output: `fraud_probability` (0.0–1.0), `risk_tier`
+- XGBoost binary classifier (`binary:logistic`), 200 estimators, max depth 6
+- Input: 49 engineered features (transaction-level, velocity, graph, India-specific)
+- Output: `fraud_probability` (0.0–1.0), `risk_tier`, SHAP feature contributions
 
 **Risk tiers:**
 | Probability | Tier |
 |---|---|
-| ≥ 0.70 | CRITICAL/HIGH → BLOCK |
-| 0.30–0.70 | MEDIUM → FLAG |
+| ≥ 0.80 | CRITICAL |
+| 0.60–0.80 | HIGH → BLOCK at threshold 0.70 |
+| 0.30–0.60 | MEDIUM → FLAG |
 | < 0.30 | LOW → PASS |
 
-**SHAP explainability:** `explainability/explain.py` wraps `shap.TreeExplainer` to produce
-the top-5 feature contributions per prediction. This explains *why* the model scored high.
+**Evaluated metrics (both distributions — see `eval_natural_distribution.py`):**
+| Metric | Rebalanced eval set (1.84%) | Natural full dataset (1.84%) |
+|---|---|---|
+| PR-AUC | 0.7224 | 0.7128 |
+| Precision @ 0.70 | 0.2896 | 0.2925 |
+| Recall @ 0.70 | 0.8119 | 0.8174 |
+| F1 @ 0.70 | 0.4269 | 0.4308 |
+| ROC-AUC | 0.9666 | 0.9669 |
+
+> Both distributions give near-identical results because the DB fraud rate (1.84%) matches
+> the eval set — both are post-augmentation. The natural PaySim base rate of ~0.13% was not
+> separately evaluated (augmentation was applied before splitting).
+
+**Threshold rationale (0.70):** Maximises recall (catch as many fraud cases as possible).
+Precision 0.29 = 3 in 10 alerts are real fraud. In AML, missing a real STR is worse than
+a false alert (analyst triage cost). High-recall / lower-precision is deliberate.
+
+**SHAP — XGBoost native `predict_contribs()`:**
+Returns true log-odds SHAP contributions per feature without requiring the `shap` package
+(which imports `torch` and fails on some environments due to DLL issues).
+```python
+booster.predict(dmatrix, pred_contribs=True)  # shape (n, n_features+1)
+# Last column is bias term — drop it. Values in log-odds scale (typically +-0.1 to +-3).
+```
+Explainer booster cached at module level (`_shap_explainer`) — loads once per process.
+Example real SHAP values: `hour_of_day: +2.258`, `receiver_is_pure_receiver: +1.240`
+(vs. the old proxy which produced `sender_avg_amount: 225.0` — that was feature×importance, not SHAP).
+
+**Feature leakage:** Confirmed clean. `sender_avg_amount` in `engineer_single()` is computed
+from `account_history` (past DB rows, fetched before the current transaction exists in the DB).
+The current transaction is never included in its own rolling features.
+
+**Augmentation methodology:** PaySim types (CASH-IN/CASH-OUT/TRANSFER etc.) were remapped
+to Indian types (UPI/NEFT/ATM) in `ingestion/loader.py`. Fraud labels come from PaySim's
+original `isFraud` column — fraud assignment was NOT derived from the type remapping.
 
 **Model file:** `models/saved/xgboost_fraud.pkl` (pickle, ~8MB)
 
 **Prediction interface:**
 ```python
 from models.predictor import predict_single
-result = predict_single(transaction_dict, account_history_list)
-# Returns: {"fraud_probability": 0.77, "risk_tier": "HIGH", "top_features": [...]}
+result = predict_single(transaction_dict, account_history_df)
+# Returns: {"fraud_probability": 0.84, "risk_tier": "CRITICAL",
+#           "top_features": [{"feature": "hour_of_day", "shap_value": 2.258, ...}]}
 ```
 
 ---
@@ -231,10 +266,12 @@ Key design: builds graph fresh per call via SQL. Never pre-truncated.
 #### Tool 3: `score_risk`
 ```python
 Input:  account_id (str)
-Output: fraud_probability, risk_tier, top_shap_features
-Source: XGBoost predict_single + SHAP TreeExplainer
+Output: fraud_probability, risk_tier, top_features (real SHAP log-odds)
+Source: XGBoost predict_single + native predict_contribs() SHAP
 ```
-Uses the last 50 transactions as account history for behavioural features.
+Fetches last 50 transactions from DB as account history for behavioural features.
+SHAP values are true log-odds contributions (e.g. `hour_of_day: +2.26`) — not the
+feature×importance proxy that was in the original code (which produced `225.0`).
 
 #### Tool 4: `search_regulations`
 ```python
@@ -449,6 +486,9 @@ python test_rag.py
 
 # All 7 integration checks
 python verify_all.py
+
+# Natural-distribution model evaluation (run once, save the output)
+python eval_natural_distribution.py
 ```
 
 ---
