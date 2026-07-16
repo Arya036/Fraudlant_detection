@@ -73,7 +73,13 @@ def predict_single(txn: dict, account_history: pd.DataFrame = None,
     else:
         risk_tier = "CRITICAL"
 
-    # Top contributing features (SHAP-lite: feature value × importance)
+    # Feature driver scores: feature_value × XGBoost tree importance.
+    # NOTE: This is NOT a SHAP value. True SHAP (log-odds contributions) is
+    # available via explainability/explain.py (shap.TreeExplainer) but is not
+    # called here to avoid model-reload overhead in the agent loop.
+    # The numbers below are a heuristic proxy for feature importance ranking.
+    # sender_avg_amount scores high because its raw value (large synthetic units)
+    # multiplies a non-zero importance weight — interpret rank, not magnitude.
     feat_scores = {}
     for col in feature_cols:
         val = features.get(col, 0)

@@ -64,13 +64,17 @@ def format_str(
         )
     citation_section = "\n".join(citation_lines) if citation_lines else "  [No regulatory citations retrieved]"
 
-    # ── SHAP feature section ───────────────────────────────────────────────
-    shap_lines = []
+    # ── Feature importance section ────────────────────────────────────────
+    # Note: these are NOT SHAP values. They are feature_value × XGBoost
+    # tree importance scores — a heuristic proxy for feature contribution.
+    # sender_avg_amount dominates because its raw value (synthetic units)
+    # is large and multiplies a non-zero importance weight.
+    feat_lines = []
     for f in top_features[:5]:
-        shap_lines.append(
-            f"  • {f.get('feature', '?')}: contribution={f.get('contribution', 0):+.4f}"
+        feat_lines.append(
+            f"  • {f.get('feature', '?')}: importance-weighted score={f.get('contribution', 0):+.4f}"
         )
-    shap_section = "\n".join(shap_lines) if shap_lines else "  • [Score not computed]"
+    feat_section = "\n".join(feat_lines) if feat_lines else "  • [Score not computed]"
 
     # ── STR body ──────────────────────────────────────────────────────────
     str_text = f"""
@@ -115,14 +119,16 @@ SECTION B — GRAPH INTELLIGENCE
   Ring IDs                     : {', '.join(graph_data.get('ring_ids', [])) or 'None'}
   Connected Accounts (sample)  : {', '.join(graph_data.get('connected_nodes', [])[:8])}
 
-SECTION C — ML RISK SCORING (XGBoost + SHAP)
+SECTION C — ML RISK SCORING (XGBoost)
 ───────────────────────────────────────────────────────────────────────────────
   Risk Tier           : {risk_tier}
   Fraud Probability   : {f"{fraud_prob:.4f}" if fraud_prob is not None else "Not scored"}
   Decision Threshold  : 0.70 (above = BLOCK | 0.30–0.70 = FLAG)
 
-  Top SHAP Feature Contributions:
-{shap_section}
+  Metrics (rebalanced 1.84% test set): PR-AUC=0.72 | Precision@0.70=0.29 | Recall@0.70=0.81
+
+  Top Feature Drivers (importance × value — heuristic proxy, not true SHAP):
+{feat_section}
 
 SECTION D — AML TYPOLOGY ANALYSIS
 ───────────────────────────────────────────────────────────────────────────────
