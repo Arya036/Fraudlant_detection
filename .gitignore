@@ -38,6 +38,11 @@ data/raw/
 # ── RAG vector store (rebuild with --ingest) ─────────────
 rag/vector_store/
 
+# ── RAG corpus PDFs (too large for GitHub — download per SETUP.md) ─
+# The 4 regulatory PDFs (FATF, RBI, FinCEN, MHA) must be placed manually.
+# See SETUP.md Step 4b for download instructions.
+rag/corpus/*.pdf
+
 # ── Trained model binary (share via Google Drive) ────────
 # models/saved/xgboost_fraud.pkl   ← uncomment to exclude model
 # models/saved/model_metadata.json ← uncomment to exclude metadata
