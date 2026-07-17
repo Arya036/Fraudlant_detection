@@ -280,73 +280,86 @@ function STRResult({ result, accountId, onReset }) {
 }
 
 export default function Investigate({ initialAccount, setInitialAccount }) {
-  const [input,   setInput]   = useState(initialAccount || '');
-  const [jobId,   setJobId]   = useState(null);
-  const [status,  setStatus]  = useState('idle'); // idle | running | done | error
-  const [result,  setResult]  = useState(null);
-  const [error,   setError]   = useState('');
+  const [input,     setInput]     = useState(initialAccount || '');
+  const [jobId,     setJobId]     = useState(null);
+  const [status,    setStatus]    = useState('idle');
+  const [result,    setResult]    = useState(null);
+  const [error,     setError]     = useState('');
   const [stepsDone, setStepsDone] = useState(0);
-  const pollRef = useRef(null);
+  const pollRef   = useRef(null);
+  const cancelRef = useRef(false);   // guards StrictMode double-mount
 
-  // Auto-start if initialAccount set
   useEffect(() => {
     if (initialAccount) {
       setInput(initialAccount);
       setInitialAccount('');
-      // small delay to let state settle
       setTimeout(() => handleStart(initialAccount), 100);
     }
+    return () => { cancelRef.current = true; clearPoll(); };
   }, []);
 
   function clearPoll() {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }
 
   async function handleStart(acct) {
-    const accountId = acct || input.trim();
+    const accountId = (acct || input).trim();
     if (!accountId) return;
+    clearPoll();
+    cancelRef.current = false;
     setStatus('running');
     setResult(null);
     setError('');
     setStepsDone(0);
 
+    let job_id;
     try {
-      const { job_id } = await startInvestigation(accountId);
+      const res = await startInvestigation(accountId);
+      job_id = res.job_id;
       setJobId(job_id);
-
-      let step = 0;
-      pollRef.current = setInterval(async () => {
-        try {
-          const data = await pollInvestigation(job_id);
-          // animate steps
-          if (step < TOOL_STEPS.length) {
-            step += 1;
-            setStepsDone(step);
-          }
-          if (data.status === 'done') {
-            clearPoll();
-            // API returns everything at root level, not nested under data.result
-            setResult(data);
-            setStatus('done');
-          } else if (data.status === 'error') {
-            clearPoll();
-            setError(data.error || 'Unknown error');
-            setStatus('error');
-          }
-        } catch (e) {
-          clearPoll();
-          setError(e.message);
-          setStatus('error');
-        }
-      }, 4000);
     } catch (e) {
       setError(e.message);
       setStatus('error');
+      return;
     }
+
+    let step = 0;
+    let polls = 0;
+    const MAX_POLLS = 45;  // 45 × 4 s = 3 min timeout
+
+    pollRef.current = setInterval(async () => {
+      if (cancelRef.current) { clearPoll(); return; }
+      polls++;
+      if (polls > MAX_POLLS) {
+        clearPoll();
+        setError('Investigation timed out after 3 minutes.');
+        setStatus('error');
+        return;
+      }
+      try {
+        const data = await pollInvestigation(job_id);
+        if (step < TOOL_STEPS.length) { step++; setStepsDone(step); }
+
+        if (data.status === 'done') {
+          clearPoll();
+          setResult(data);
+          setStatus('done');
+        } else if (data.status === 'error') {
+          clearPoll();
+          setError(data.error || 'Investigation failed on the backend.');
+          setStatus('error');
+        }
+      } catch (e) {
+        clearPoll();
+        setError(e.message);
+        setStatus('error');
+      }
+    }, 4000);
   }
 
   function reset() {
     clearPoll();
+    cancelRef.current = false;
     setStatus('idle');
     setResult(null);
     setError('');

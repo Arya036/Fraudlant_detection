@@ -402,10 +402,16 @@ class GraphRequest(BaseModel):
 def get_graph(req: GraphRequest):
     """Build the transaction network for an account. Used by Graph View page."""
     try:
-        from agent.tools import get_transaction_graph
-        raw = get_transaction_graph(req.account_id, req.max_hops)
+        # Import directly from graph engine — does NOT require LangChain
+        from graph.fund_flow import build_ego_graph
+        from graph.mule_detector import score_mule
+        from graph.ring_detector import detect_rings
 
-        # Build node/edge list for react-force-graph
+        G = build_ego_graph(req.account_id, max_hops=req.max_hops)
+        mule_result = score_mule(G, req.account_id)
+        ring_result = detect_rings(G, req.account_id)
+
+        # Build node/edge list for the React SVG graph
         conn = _get_db()
         rows = conn.execute("""
             SELECT sender_account, receiver_account, amount,
@@ -422,27 +428,70 @@ def get_graph(req: GraphRequest):
             nodes_set.add(r["sender_account"])
             nodes_set.add(r["receiver_account"])
             edges.append({
-                "from": r["sender_account"],
-                "to":   r["receiver_account"],
-                "amount": round(r["amount"] or 0, 2),
+                "from":      r["sender_account"],
+                "to":        r["receiver_account"],
+                "amount":    round(r["amount"] or 0, 2),
                 "fraud_prob": round(r["fraud_probability"] or 0, 4),
-                "txn_type": r["txn_type"] or "UNKNOWN",
+                "txn_type":  r["txn_type"] or "UNKNOWN",
             })
 
         nodes = [{"id": n, "is_subject": n == req.account_id} for n in nodes_set]
         high_risk = sum(1 for e in edges if e["fraud_prob"] > 0.7)
 
         return {
-            "account_id": req.account_id,
-            "nodes": nodes,
-            "edges": edges,
+            "account_id":     req.account_id,
+            "nodes":          nodes,
+            "edges":          edges,
             "stats": {
-                "total_nodes": len(nodes),
-                "total_edges": len(edges),
+                "total_nodes":     len(nodes),
+                "total_edges":     len(edges),
                 "high_risk_edges": high_risk,
             },
-            "graph_analysis": raw,
+            "graph_analysis": {
+                "mule_score":        mule_result.get("mule_score"),
+                "is_suspected_mule": mule_result.get("is_suspected_mule"),
+                "in_ring":           ring_result.get("in_ring"),
+                "ring_count":        ring_result.get("ring_count", 0),
+                "graph_profile":     mule_result.get("graph_profile", {}),
+            },
         }
+    except ImportError as e:
+        # Fallback: build graph purely from SQL without graph engine modules
+        logger.warning("Graph engine import failed (%s), using SQL fallback", e)
+        try:
+            conn = _get_db()
+            rows = conn.execute("""
+                SELECT sender_account, receiver_account, amount,
+                       fraud_probability, txn_type
+                FROM transactions
+                WHERE sender_account = ? OR receiver_account = ?
+                LIMIT 200
+            """, (req.account_id, req.account_id)).fetchall()
+            conn.close()
+
+            nodes_set = set()
+            edges = []
+            for r in rows:
+                nodes_set.add(r["sender_account"])
+                nodes_set.add(r["receiver_account"])
+                edges.append({
+                    "from":      r["sender_account"],
+                    "to":        r["receiver_account"],
+                    "amount":    round(r["amount"] or 0, 2),
+                    "fraud_prob": round(r["fraud_probability"] or 0, 4),
+                    "txn_type":  r["txn_type"] or "UNKNOWN",
+                })
+
+            nodes = [{"id": n, "is_subject": n == req.account_id} for n in nodes_set]
+            return {
+                "account_id":  req.account_id,
+                "nodes":       nodes,
+                "edges":       edges,
+                "stats":       {"total_nodes": len(nodes), "total_edges": len(edges)},
+                "graph_analysis": {},
+            }
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=str(e2))
     except Exception as e:
         logger.error("Graph error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
