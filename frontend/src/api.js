@@ -1,41 +1,52 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export async function startInvestigation(accountId) {
-  const res = await fetch(`${API_BASE}/investigate`, {
+async function apiFetch(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, options);
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { const j = await res.json(); detail = j.detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+// ── Investigation ────────────────────────────────────────────────
+export function startInvestigation(accountId) {
+  return apiFetch('/investigate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ account_id: accountId }),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json(); // { job_id, status }
 }
 
-export async function pollInvestigation(jobId) {
-  const res = await fetch(`${API_BASE}/investigate/${jobId}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json(); // { status, result? }
+export function pollInvestigation(jobId) {
+  return apiFetch(`/investigate/${jobId}`);
 }
 
-export async function getGraph(accountId) {
-  const res = await fetch(`${API_BASE}/tools/graph?account_id=${encodeURIComponent(accountId)}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// ── Graph (POST — body contains account_id + max_hops) ──────────
+export function getGraph(accountId, maxHops = 2) {
+  return apiFetch('/tools/graph', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, max_hops: maxHops }),
+  });
 }
 
-export async function searchRegulations(query, topK = 5) {
-  const res = await fetch(`${API_BASE}/tools/rag?query=${encodeURIComponent(query)}&top_k=${topK}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// ── RAG search (POST — body contains query + top_k) ─────────────
+export function searchRegulations(query, topK = 5) {
+  return apiFetch('/tools/rag', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, top_k: topK }),
+  });
 }
 
-export async function getAlerts(skip = 0, limit = 50) {
-  const res = await fetch(`${API_BASE}/alerts?skip=${skip}&limit=${limit}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// ── Alerts (GET — backend uses 'offset' not 'skip') ──────────────
+export function getAlerts(offset = 0, limit = 50) {
+  return apiFetch(`/alerts?offset=${offset}&limit=${limit}`);
 }
 
-export async function getHealth() {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// ── Health ───────────────────────────────────────────────────────
+export function getHealth() {
+  return apiFetch('/health');
 }

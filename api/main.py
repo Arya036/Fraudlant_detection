@@ -65,15 +65,20 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",   # Vite dev server
-        "http://localhost:3000",   # Next.js dev server
-        "http://localhost:4173",   # Vite preview
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://localhost:4173",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:4173",
     ],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 
@@ -118,13 +123,20 @@ def _chroma_ready() -> bool:
 @app.get("/health", tags=["Platform"])
 def health():
     """Returns platform stats for the landing page stats strip."""
+    db = _db_stats()
     return {
         "status": "ok",
-        "db": _db_stats(),
-        "model": "XGBoost (PaySim-trained, FundFlow engine)",
+        "database": {
+            "total_transactions": db.get("transactions", 0),
+            "total_alerts":       db.get("alerts", 0),
+            "fraud_labeled":      db.get("fraud_labeled", 0),
+            "fraud_rate":         db.get("fraud_rate_pct", 0),
+            "data_note":          db.get("data_note", ""),
+        },
+        "model":       "XGBoost (PaySim-trained, FundFlow engine)",
         "rag_ingested": _chroma_ready(),
-        "agent": "LangGraph ReAct (GPT-4o-mini)",
-        "version": "1.0.0",
+        "agent":       "LangGraph ReAct (GPT-4o-mini)",
+        "version":     "1.0.0",
     }
 
 

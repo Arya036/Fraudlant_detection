@@ -79,15 +79,17 @@ function ShapBar({ feature, value, maxAbs }) {
 function STRResult({ result, accountId, onReset }) {
   const rc        = getRiskClass(result.risk_tier);
   const riskColor = getRiskColour(result.risk_tier);
-  const topFeats  = result.ml_risk?.top_features || result.top_features || [];
-  const maxAbs    = Math.max(...topFeats.map(f => Math.abs(f.shap_value ?? f.contribution ?? 0)), 0.001);
-  const citations = result.regulatory_citations || [];
-  const typologies = result.typologies || [];
-  const graphData  = result.graph_intelligence || {};
-  const acctData   = result.account_summary || {};
+  // API response: str_sections contains parsed fields
+  const sections  = result.str_sections || {};
+  const topFeats  = sections.ml_risk?.top_shap_features || [];
+  const maxAbs    = Math.max(...topFeats.map(f => Math.abs(f.contribution ?? 0)), 0.001);
+  const citations = sections.regulatory_citations || [];
+  const typologies = sections.typologies || [];
+  const graphData  = sections.graph_intelligence || {};
+  const acctData   = sections.account_summary || {};
 
   function downloadSTR() {
-    const text = result.str_text || JSON.stringify(result, null, 2);
+    const text = result.str_draft_text || JSON.stringify(result, null, 2);
     const blob = new Blob([text], { type: 'text/plain' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -323,7 +325,8 @@ export default function Investigate({ initialAccount, setInitialAccount }) {
           }
           if (data.status === 'done') {
             clearPoll();
-            setResult(data.result);
+            // API returns everything at root level, not nested under data.result
+            setResult(data);
             setStatus('done');
           } else if (data.status === 'error') {
             clearPoll();

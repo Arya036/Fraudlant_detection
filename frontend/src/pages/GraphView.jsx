@@ -23,8 +23,8 @@ function SimpleForceGraph({ nodes, edges }) {
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxHeight: 400 }}>
       {/* Edges */}
       {edges.map((e, i) => {
-        const src = posMap[e.source];
-        const tgt = posMap[e.target];
+        const src = posMap[e.from];
+        const tgt = posMap[e.to];
         if (!src || !tgt) return null;
         return (
           <line
@@ -32,7 +32,7 @@ function SimpleForceGraph({ nodes, edges }) {
             x1={src.x} y1={src.y}
             x2={tgt.x} y2={tgt.y}
             stroke="#CBD5E1"
-            strokeWidth={Math.min(4, 1 + (e.weight || 0) / 50000)}
+            strokeWidth={Math.min(4, 1 + (e.amount || 0) / 50000)}
             strokeOpacity={0.8}
             markerEnd="url(#arrow)"
           />
@@ -98,9 +98,12 @@ export default function GraphView() {
     }
   }
 
-  const nodes = data?.nodes || [];
-  const edges = data?.edges || [];
-  const profile = data?.graph_profile || {};
+  const nodes   = data?.nodes || [];
+  // Backend returns edges with 'from'/'to' keys
+  const edges   = data?.edges || [];
+  // Graph analysis (mule score, ring, profile) is nested under graph_analysis
+  const ga      = data?.graph_analysis || {};
+  const profile = ga?.graph_profile || {};
 
   return (
     <div className="main-content">
@@ -169,32 +172,32 @@ export default function GraphView() {
             {/* Stats panel */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {/* Mule Score */}
-              <div className={`card ${data.is_suspected_mule ? 'risk-high' : 'risk-low'}`}>
+              <div className={`card ${ga.is_suspected_mule ? 'risk-high' : 'risk-low'}`}>
                 <div className="card-header">
                   <span className="card-title">Mule Detection</span>
                 </div>
                 <div className="card-body">
-                  <div style={{ fontSize: 28, fontWeight: 800, color: data.is_suspected_mule ? 'var(--risk-high)' : 'var(--risk-low)', fontFamily: 'monospace' }}>
-                    {typeof data.mule_score === 'number' ? data.mule_score.toFixed(4) : '—'}
+                  <div style={{ fontSize: 28, fontWeight: 800, color: ga.is_suspected_mule ? 'var(--risk-high)' : 'var(--risk-low)', fontFamily: 'monospace' }}>
+                    {typeof ga.mule_score === 'number' ? ga.mule_score.toFixed(4) : '—'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>mule score (≥0.6 = suspected)</div>
-                  <div style={{ marginTop: 12, fontSize: 13, color: data.is_suspected_mule ? 'var(--risk-high)' : 'var(--risk-low)', fontWeight: 600 }}>
-                    {data.is_suspected_mule ? '⚠ Suspected Mule Account' : '✓ Not a Suspected Mule'}
+                  <div style={{ marginTop: 12, fontSize: 13, color: ga.is_suspected_mule ? 'var(--risk-high)' : 'var(--risk-low)', fontWeight: 600 }}>
+                    {ga.is_suspected_mule ? '⚠ Suspected Mule Account' : '✓ Not a Suspected Mule'}
                   </div>
                 </div>
               </div>
 
               {/* Ring Detection */}
-              <div className={`card ${data.in_ring ? 'risk-critical' : 'risk-low'}`}>
+              <div className={`card ${ga.in_ring ? 'risk-critical' : 'risk-low'}`}>
                 <div className="card-header">
                   <span className="card-title">Ring Detection</span>
                 </div>
                 <div className="card-body">
-                  <div style={{ fontSize: 28, fontWeight: 800, color: data.in_ring ? 'var(--risk-critical)' : 'var(--risk-low)' }}>
-                    {data.in_ring ? '⚠ Ring Found' : '✓ None'}
+                  <div style={{ fontSize: 28, fontWeight: 800, color: ga.in_ring ? 'var(--risk-critical)' : 'var(--risk-low)' }}>
+                    {ga.in_ring ? '⚠ Ring Found' : '✓ None'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-                    {data.ring_count > 0 ? `${data.ring_count} circular flow(s)` : 'No circular fund flows detected'}
+                    {ga.ring_count > 0 ? `${ga.ring_count} circular flow(s)` : 'No circular fund flows detected'}
                   </div>
                 </div>
               </div>
