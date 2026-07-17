@@ -47,7 +47,7 @@ function AgentRunning({ accountId, stepsDone }) {
           })}
         </div>
 
-        <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 16 }}>
+      <p style={{ fontSize:11, color:'#9CA3AF', textAlign:'center', marginTop:16 }}>
           Typically 30–90 seconds · Calling GPT-4o-mini + 5 domain tools
         </p>
       </div>
@@ -228,11 +228,9 @@ function STRResult({ result, accountId, onReset }) {
                 <CheckCircle size={15} style={{ color: 'var(--risk-low)' }} /> None detected
               </div>
             ) : typologies.map((t, i) => (
-              <div key={i} style={{ marginBottom: 10, padding: '10px 12px', background: 'rgba(0,0,0,0.25)', borderRadius: 8, borderLeft: '3px solid var(--risk-high)' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--risk-high)', marginBottom: 3 }}>
-                  [{t.risk}] {t.type}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t.description}</div>
+              <div key={i} style={{ marginBottom:10, padding:'10px 12px', background:'var(--bg-base)', borderRadius:8, borderLeft:'3px solid var(--risk-high)', border:'1px solid var(--border)', borderLeftColor:'var(--risk-high)', borderLeftWidth:3 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--risk-high)', marginBottom:3 }}>[{t.risk}] {t.type}</div>
+                <div style={{ fontSize:12, color:'var(--text-secondary)' }}>{t.description}</div>
               </div>
             ))}
           </div>
@@ -265,16 +263,11 @@ function STRResult({ result, accountId, onReset }) {
 
       {/* Disclaimer */}
       <div style={{
-        marginTop: 20,
-        padding: '12px 16px',
-        background: 'rgba(0,0,0,0.25)',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        fontSize: 11,
-        color: 'var(--text-muted)',
-        lineHeight: 1.7,
+        marginTop:20, padding:'12px 16px',
+        background:'var(--bg-base)', border:'1px solid var(--border)',
+        borderRadius:10, fontSize:11, color:'var(--text-muted)', lineHeight:1.7,
       }}>
-        <strong style={{ color: 'var(--text-secondary)' }}>⚠ Disclaimer:</strong>{' '}
+        <strong style={{ color:'var(--text-secondary)' }}>⚠ Disclaimer:</strong>{' '}
         This is an AI-generated DRAFT for internal compliance use only. It is NOT a filed STR, NOT legal advice,
         and NOT court-admissible evidence. All findings require independent verification by a certified compliance
         officer. Transaction data is synthetic (PaySim-derived); regulatory thresholds must be validated against

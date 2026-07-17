@@ -31,9 +31,9 @@ function SimpleForceGraph({ nodes, edges }) {
             key={i}
             x1={src.x} y1={src.y}
             x2={tgt.x} y2={tgt.y}
-            stroke="#334155"
+            stroke="#CBD5E1"
             strokeWidth={Math.min(4, 1 + (e.weight || 0) / 50000)}
-            strokeOpacity={0.6}
+            strokeOpacity={0.8}
             markerEnd="url(#arrow)"
           />
         );
@@ -41,7 +41,7 @@ function SimpleForceGraph({ nodes, edges }) {
       {/* Arrow marker */}
       <defs>
         <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6 Z" fill="#475569" />
+          <path d="M0,0 L6,3 L0,6 Z" fill="#94A3B8" />
         </marker>
       </defs>
       {/* Nodes */}
@@ -64,7 +64,7 @@ function SimpleForceGraph({ nodes, edges }) {
             <text
               x={n.x} y={n.y + 28}
               textAnchor="middle"
-              fill="#94A3B8"
+              fill="#475569"
               fontSize={9}
               fontFamily="monospace"
             >
@@ -158,7 +158,7 @@ export default function GraphView() {
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>2-hop ego-subgraph</span>
               </div>
-              <div className="card-body" style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '0 0 14px 14px' }}>
+              <div className="card-body" style={{ background: 'var(--bg-base)', borderRadius: '0 0 14px 14px' }}>
                 <SimpleForceGraph nodes={nodes} edges={edges} />
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8 }}>
                   Node colour = risk tier · Node size = subject account · Edge weight = transaction amount
