@@ -241,10 +241,21 @@ check(7, "Cold start — run_ps6.py verify mode (no manual hacks)")
 
 import subprocess
 try:
+    # Prevent PyTorch/MKL threadpool deadlocks on Windows when spawning subprocesses after importing torch
+    sub_env = {
+        **os.environ,
+        "PS6_DB_PATH": DB_PATH,
+        "CHROMA_DB_PATH": CHROMA_PATH,
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1"
+    }
     proc = subprocess.run(
         [sys.executable, str(ROOT / "run_ps6.py"), "--verify"],
-        capture_output=True, text=True, timeout=60, cwd=str(ROOT),
-        env={**os.environ, "PS6_DB_PATH": DB_PATH, "CHROMA_DB_PATH": CHROMA_PATH}
+        capture_output=True, text=True, timeout=90, cwd=str(ROOT),
+        env=sub_env
     )
     stdout = proc.stdout + proc.stderr
     print(f"  Exit code: {proc.returncode}")
@@ -267,8 +278,9 @@ try:
                 failed(7, f"run_ps6.py import failed: {proc2.stderr[:200]}")
         else:
             failed(7, f"run_ps6.py --verify failed (exit {proc.returncode}): {stdout[:300]}")
-except subprocess.TimeoutExpired:
-    failed(7, "run_ps6.py timed out after 60s")
+except subprocess.TimeoutExpired as e:
+    stdout_so_far = (e.stdout or "") + (e.stderr or "")
+    failed(7, f"run_ps6.py timed out after 90s. Output so far: {stdout_so_far[-500:]}")
 except Exception as e:
     failed(7, str(e))
 
