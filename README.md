@@ -6,7 +6,7 @@
 [![LangGraph](https://img.shields.io/badge/Agent-LangGraph_ReAct-purple?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![XGBoost](https://img.shields.io/badge/Model-XGBoost-orange?style=flat-square)](https://xgboost.readthedocs.io/)
 [![ChromaDB](https://img.shields.io/badge/RAG-ChromaDB-green?style=flat-square)](https://trychroma.com)
-[![Streamlit](https://img.shields.io/badge/UI-Streamlit-red?style=flat-square)](https://streamlit.io)
+[![React](https://img.shields.io/badge/UI-React_Vite-blue?style=flat-square)](https://react.dev)
 
 ---
 
@@ -27,11 +27,11 @@ A compliance analyst enters one account ID. The AI agent takes over: it queries 
 │                     SENTINEL AI PLATFORM                        │
 │                                                                 │
 │  ┌─────────────────────────┐   ┌──────────────────────────────┐ │
-│  │  MODULE 1               │   │  STREAMLIT CONSOLE (UI)      │ │
-│  │  FundFlow Graph Engine  │   │  4-tab investigation UI      │ │
-│  │  (XGBoost + NetworkX)   │   │  Plotly network graphs       │ │
-│  └──────────┬──────────────┘   │  RAG search interface        │ │
-│             │ tools            │  Alert browser               │ │
+│  │  MODULE 1               │   │  REACT / VITE DASHBOARD (UI) │ │
+│  │  FundFlow Graph Engine  │   │  5-page investigation UI     │ │
+│  │  (XGBoost + NetworkX)   │   │  Live AI Agent logs & graphs │ │
+│  └──────────┬──────────────┘   │  RAG search & Alerts API     │ │
+│             │ tools            │  Dribbble-inspired styling   │ │
 │             ▼                  └──────────────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │             MODULE 2: AGENTIC AML INVESTIGATOR           │   │
@@ -113,8 +113,15 @@ e:\PS6\
 │   ├── corpus/             # Place regulatory PDFs here
 │   └── vector_store/       # Chroma persistent store (auto-created)
 │
+├── frontend/               # React + Vite UI Dashboard
+│   ├── src/pages/          # 5 main pages (Dashboard, Investigate, GraphView, RAGLookup, Alerts)
+│   └── src/index.css       # Custom design system with risk tokens
+│
+├── api/
+│   └── main.py             # FastAPI backend (agent endpoint, graph endpoint, RAG endpoint)
+│
 ├── console/
-│   └── app.py              # Streamlit 4-tab investigation console
+│   └── app.py              # Legacy Streamlit 4-tab console (fallback)
 │
 ├── models/                 # XGBoost fraud model (trained by us on PaySim)
 ├── graph/                  # Fund flow graph engine (NetworkX)
@@ -170,11 +177,20 @@ python run_ps6.py --ingest
 # Expected: ~1088 chunks ingested across 4 documents
 ```
 
-### 5. Launch the console
+### 5. Launch the Application
 
+Start the FastAPI backend:
 ```bash
-python run_ps6.py --console
-# Opens at http://localhost:8501
+uvicorn api.main:app --reload
+# Runs on http://localhost:8000
+```
+
+Start the React Frontend (in a new terminal):
+```bash
+cd frontend
+npm install
+npm run dev
+# Opens at http://localhost:5173
 ```
 
 ### 6. Run the end-to-end agent test
@@ -219,7 +235,7 @@ All accounts below are CRITICAL tier with multiple fraud-flagged transactions:
 | Innovation | 30% | LangGraph ReAct agent autonomously chains 5 domain-specific AML tools; genuine function-calling LLM orchestration (not a pipeline) |
 | Technical Implementation | 30% | XGBoost + SHAP, NetworkX ego-graph, ChromaDB RAG, LangGraph — all integrated end-to-end |
 | Scalability | 15% | Modular tool design; SQL-based graph construction (no pre-truncation); vector store scales to full corpus |
-| User Experience | 15% | 4-tab Streamlit console; dark theme; real-time investigation flow; full cited STR output |
+| User Experience | 15% | 5-page React dashboard; premium Dribbble-inspired UI; real-time agent execution animation; risk-accent borders; full cited STR output |
 | Impact | 10% | Directly addresses FIU-IND STR filing workflow; reduces AML analyst assembly time from hours to minutes (tested at ~90s per investigation) |
 
 ---
@@ -253,8 +269,9 @@ Built on top of the ML foundation:
 - **Regulatory RAG** — ingested 4 real regulatory PDFs (1,088 chunks) into ChromaDB. Built `rag/retriever.py` with source→display-name mapping for clean citations in STRs.
 - **STR generator** — formats all tool evidence into a 6-section draft STR aligned to FIU-IND/RBI/PMLA structure.
 - **Guardrail system** — enforces citation requirements and minimum evidence before STR generation (G1–G4).
-- **FastAPI backend** — async investigation endpoint with job polling, graph endpoint, RAG search, and alerts API for the React frontend.
-- **Streamlit console** — 4-tab investigation UI for demo and fallback.
+- **FastAPI backend** — async investigation endpoint with job polling, graph endpoint, RAG search, and alerts API.
+- **React + Vite Frontend** — 5-page intelligence dashboard with Dribbble-matched design system, real-time agent running logs, interactive graph visualizations, and risk-based color tokens.
+- **Streamlit console** — legacy 4-tab UI kept as a fallback (`console/app.py`).
 
 
 ---

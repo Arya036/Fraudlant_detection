@@ -18,7 +18,7 @@ Sentinel AI was built in two phases on top of a common codebase:
   aligned to FIU-IND/PMLA format, a guardrails system, and a FastAPI backend.
 
 ```
-React Frontend
+React Frontend (frontend/)      ← Phase 2: React + Vite UI
       │
       ▼
 FastAPI (api/main.py)           ← Phase 2: Sentinel AI
@@ -38,7 +38,7 @@ FastAPI (api/main.py)           ← Phase 2: Sentinel AI
       ├──► /alerts        ──► SQLite alerts table (direct)
       └──► /health        ──► DB stats
 
-Streamlit Console (console/app.py)  ← fallback UI, same Python backend
+Streamlit Console (console/app.py)  ← legacy fallback UI, same Python backend
 ```
 
 ---
@@ -511,7 +511,31 @@ For production deployment, replace with your actual frontend domain.
 
 ---
 
-## 5. Streamlit Console — `console/app.py`
+## 5. React Frontend Architecture — `frontend/`
+
+The primary user interface is a 5-page React + Vite Single Page Application (SPA), styled with a custom Dribbble-inspired design system (`frontend/src/index.css`).
+
+### Core Pages (`frontend/src/pages/`)
+1. **`Dashboard.jsx`**: Overview screen. Shows database health, total synthetic transactions (499K), total open alerts, a risk-distribution donut chart (`recharts`), and a table of demo accounts for quick one-click launching of investigations.
+2. **`Investigate.jsx`**: The core AI interaction page. Users input an Account ID. Displays a live tool-execution log (via `setInterval` polling to `/api/investigate/{job_id}/poll`) as the LangGraph agent runs. Renders the final STR with:
+   - A colored risk banner and probability.
+   - Bento-grid cards for Account Summary, Graph Intelligence, and Typologies.
+   - A `recharts`-free native CSS bar chart for XGBoost SHAP contributors.
+   - RAG citation blocks mapped to FATF/RBI documents.
+3. **`GraphView.jsx`**: Uses a direct custom SVG-based force-directed graph to visualize the 2-hop ego subgraph. Displays nodes colored by risk tier, alongside `mule_score` and circular ring detection stats.
+4. **`RAGLookup.jsx`**: A direct UI for the ChromaDB semantic search. Shows corpus statistics and allows free-text querying of the FATF/RBI/FinCEN regulations.
+5. **`Alerts.jsx`**: A paginated view of all flagged synthetic transactions from the `alerts` SQLite table, categorized into CRITICAL, HIGH, MEDIUM, and LOW risk tabs.
+
+### Design System (`index.css`)
+- **Base Palette**: Clean light-theme `var(--bg-base)` `#F4F6FB` with white cards, heavily inspired by premium fintech dashboards.
+- **Brand Accents**: Purple `#6366F1` active states, orange-coral `#FF6B4A` primary CTAs.
+- **Risk Semantic Tokens**: Critical (Red), High (Amber), Medium (Blue), Low (Green).
+- **At-a-glance Accents**: All alert tables and risk cards feature a 3px left border mapped to the element's risk tier for immediate visual scanning.
+- **Agent Contrast**: The hero banner in the `Investigate` view uses a dark navy gradient to visually separate the AI/Agent execution layer from the rest of the standard data cards.
+
+---
+
+## 6. Legacy Streamlit Console — `console/app.py`
 
 Fallback UI — same agent, same tools, same results as the React frontend.
 
@@ -525,7 +549,7 @@ Sidebar shows: DB stats (synthetic disclaimer), demo accounts, fraud rate note.
 
 ---
 
-## 6. Environment and Deployment
+## 7. Environment and Deployment
 
 ### Environment Variables
 
@@ -568,7 +592,7 @@ python eval_natural_distribution.py
 
 ---
 
-## 7. Data Provenance
+## 8. Data Provenance
 
 | Data | Source | Reality |
 |---|---|---|
@@ -584,7 +608,7 @@ The platform architecture is data-agnostic — it works on any SQL-accessible tr
 
 ---
 
-## 8. Known Limitations
+## 9. Known Limitations
 
 | Limitation | Impact | Production fix |
 |---|---|---|
