@@ -57,6 +57,9 @@ EXECUTION_PLAN_2_WEEKS.md
 # models/saved/xgboost_fraud.pkl   ← uncomment to exclude model
 # models/saved/model_metadata.json ← uncomment to exclude metadata
 
+#tests
+scratch_verify.py
+
 # ── Generated test output ─────────────────────────────────
 test_str_output.txt
 verify_str_output.txt
