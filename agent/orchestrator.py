@@ -44,7 +44,7 @@ from agent.guardrails import validate_str_draft
 
 # ── LLM setup ─────────────────────────────────────────────────────────────────
 LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "gpt-4o-mini")
-MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "10"))
+MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "6"))
 EVIDENCE_THRESHOLD = float(os.environ.get("AGENT_EVIDENCE_THRESHOLD", "0.6"))
 
 SYSTEM_PROMPT = """You are Sentinel AI — an expert AML (Anti-Money Laundering) investigation 
@@ -89,7 +89,8 @@ def run_investigation(account_id: str) -> dict[str, Any]:
     # create_react_agent implements the ReAct loop: LLM receives tool outputs and
     # decides the next action via function-calling. The system prompt suggests an
     # investigation protocol but does NOT hardcode the tool sequence.
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
+    # Set max_retries=2 to fail fast on 429 errors instead of causing timeouts.
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=0, max_retries=2)
     agent = create_react_agent(llm, ALL_TOOLS)
 
     # Run the agent
@@ -102,7 +103,11 @@ def run_investigation(account_id: str) -> dict[str, Any]:
         )),
     ]
 
-    result = agent.invoke({"messages": messages}, config={"recursion_limit": MAX_STEPS + 5})
+    # Each tool call costs ~2 graph super-steps (LLM decision + tool execution)
+    # plus a final LLM turn. 5 tools => ~11 steps minimum; give generous headroom
+    # so the agent is not killed by GraphRecursionError mid-investigation.
+    recursion_limit = 2 * MAX_STEPS + 8
+    result = agent.invoke({"messages": messages}, config={"recursion_limit": recursion_limit})
 
     # ── Extract tool call trace ───────────────────────────────────────────────
     tool_trace = []
@@ -131,6 +136,29 @@ def run_investigation(account_id: str) -> dict[str, Any]:
                     typologies_data = content.get("typologies", []) if isinstance(content, dict) else []
             except Exception:
                 pass
+
+    # ── Finding-driven Citation Retrieval ─────────────────────────────────────
+    # Programmatically retrieve regulations based on detected typologies to ensure
+    # citations change with findings and avoid "citation theater".
+    typology_types = [t.get("type") for t in typologies_data]
+    if "MULE_ACCOUNT" in typology_types:
+        rag_query = "money mule layering intermediary shell accounts"
+    elif "ROUND_TRIPPING" in typology_types:
+        rag_query = "circular trading round tripping fund flow loops"
+    elif "LARGE_VALUE_CLUSTERING" in typology_types:
+        rag_query = "structuring suspicious transaction threshold avoidance reporting"
+    elif "SMURFING_FAN_IN" in typology_types:
+        rag_query = "smurfing structuring fan-in multiple senders"
+    else:
+        rag_query = "general compliance transaction monitoring reporting guidelines"
+
+    try:
+        from rag.retriever import retrieve_regulations
+        res = retrieve_regulations(rag_query, top_k=3)
+        # Override regulations to align with the actual findings
+        regulations = res.get("results", [])
+    except Exception as e:
+        logger.error("Finding-driven regulatory retrieval failed: %s", e)
 
     # ── Build the STR ─────────────────────────────────────────────────────────
     str_draft = format_str(
@@ -170,4 +198,9 @@ def run_investigation(account_id: str) -> dict[str, Any]:
         },
         "tool_trace": tool_trace,
         "raw_agent_output": final_message,
+        "history_data": history_data,
+        "graph_data": graph_data,
+        "risk_data": risk_data,
+        "regulations": regulations,
+        "typologies": typologies_data,
     }

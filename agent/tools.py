@@ -188,8 +188,13 @@ def get_transaction_history(account_id: str, limit: int = 50) -> str:
             "data_note": "Amounts are in PaySim synthetic units (not INR). Dataset is synthetic.",
         }
 
-        transactions = df.to_dict(orient="records")
-        return json.dumps({"summary": summary, "transactions": transactions}, default=str)
+        # Sort to get the most suspicious/highest transactions first and return only the top 5
+        df_sorted = df.sort_values(
+            by=["is_fraud", "fraud_probability", "amount"],
+            ascending=[False, False, False]
+        )
+        sample_txns = df_sorted.head(5).to_dict(orient="records")
+        return json.dumps({"summary": summary, "transactions": sample_txns}, default=str)
 
     except Exception as e:
         logger.exception("get_transaction_history failed")
@@ -229,6 +234,23 @@ def get_transaction_graph(account_id: str, max_hops: int = 4) -> str:
         mule_score = float(mule_row["mule_score"].values[0]) if len(mule_row) > 0 else 0.0
         is_mule = bool(mule_row["is_suspected_mule"].values[0]) if len(mule_row) > 0 else False
 
+        # Enrich graph_profile with mule-derived metrics so the Graph View page's
+        # Graph Metrics card can render Passthrough and Fan-out (it reads both
+        # from graph_profile). Without this they stay blank.
+        if len(mule_row) > 0:
+            profile["passthrough_ratio"] = float(mule_row["passthrough_ratio"].values[0])
+            _us = int(mule_row["unique_senders"].values[0])
+            _ur = int(mule_row["unique_receivers"].values[0])
+            # fan_out_ratio = distinct receivers per distinct sender:
+            #   >1 => disperses funds (distribution / smurf-out),
+            #   <1 => consolidates funds (fan-in / mule collection).
+            profile["fan_out_ratio"] = round(_ur / _us, 4) if _us > 0 else float(_ur)
+        else:
+            # Account filtered out of mule scoring (e.g. pure originator with
+            # total_received < 1000): nothing received to pass through.
+            profile["passthrough_ratio"] = 0.0
+            profile.setdefault("fan_out_ratio", None)
+
         # Ring detection on the ego-graph (small — always fast)
         rings = find_cycles(ffg.G, max_length=5, time_window_hours=48)
         account_rings = [r for r in rings if account_id in r.get("accounts", [])]
@@ -242,10 +264,10 @@ def get_transaction_graph(account_id: str, max_hops: int = 4) -> str:
             "ring_count": len(account_rings),
             "ring_ids": [r["ring_id"] for r in account_rings],
             "fund_flow_summary": flow.get("summary", {}),
-            "connected_nodes": flow.get("nodes", [])[:30],
+            "connected_nodes": [n for n in flow.get("nodes", []) if n != account_id][:10],
             "fraud_edges": [
                 e for e in flow.get("edges", []) if e.get("fraud_prob", 0) > 0.5
-            ][:10],
+            ][:5],
             "ego_graph_size": {
                 "nodes": ffg.get_graph_stats().get("total_nodes", 0),
                 "edges": ffg.get_graph_stats().get("total_edges", 0),
@@ -256,6 +278,41 @@ def get_transaction_graph(account_id: str, max_hops: int = 4) -> str:
     except Exception as e:
         logger.exception("get_transaction_graph failed")
         return json.dumps({"error": str(e)})
+
+
+def _highest_risk_transaction(account_id: str) -> dict:
+    """Fetch the account's single most suspicious REAL transaction as a dict
+    shaped for predict_single(). Prevents scoring an empty {} transaction, which
+    would yield a meaningless probability + SHAP. Considers txns where the account
+    is sender OR receiver, ranked by fraud flag, then probability, then amount."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT txn_id, timestamp, sender_account, receiver_account,
+                   amount, txn_type, channel
+            FROM transactions
+            WHERE sender_account = ? OR receiver_account = ?
+            ORDER BY is_fraud DESC, fraud_probability DESC, amount DESC
+            LIMIT 1
+            """,
+            (account_id, account_id),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        logger.error("_highest_risk_transaction failed for %s: %s", account_id, e)
+        return {}
+    if row is None:
+        return {}
+    return {
+        "amount":           row["amount"],
+        "txn_type":         row["txn_type"],
+        "channel":          row["channel"],
+        "timestamp":        row["timestamp"],
+        "sender_account":   row["sender_account"],
+        "receiver_account": row["receiver_account"],
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -273,6 +330,12 @@ def score_risk(account_id: str, transaction: dict) -> str:
                      sender_account, receiver_account (all optional except amount).
     """
     try:
+        # Guard: never score an empty transaction. If the agent did not supply a
+        # concrete transaction (or omitted the amount), fall back to the account's
+        # highest-risk REAL transaction so the score + SHAP describe something real.
+        if not isinstance(transaction, dict) or transaction.get("amount") is None:
+            transaction = _highest_risk_transaction(account_id) or (transaction if isinstance(transaction, dict) else {})
+
         conn = sqlite3.connect(DB_PATH)
         history = pd.read_sql_query(
             "SELECT * FROM transactions WHERE sender_account = ? ORDER BY timestamp DESC LIMIT 50",
@@ -379,12 +442,11 @@ def detect_typology(account_id: str) -> str:
         typologies = []
         sent = df[df["sender_account"] == account_id]
 
-        # ── Structuring (pattern-based, dataset-agnostic) ─────────────────────
-        # We detect clustering just below the account's own ceiling amount.
-        # This is equivalent to the behavioral signal (deliberate sub-threshold
-        # avoidance) without requiring absolute INR amounts.
-        # In production: replace ceiling with actual regulatory thresholds (e.g.
-        # INR 50K, 1L, 10L) applied against real currency amounts.
+        # ── Large Value Clustering (Behavioral Signal) ────────────────────────
+        # We detect clustering just below the account's historical max transaction amount.
+        # This is a proxy for repetitive near-limit patterns.
+        # In production: replace historical max with fixed regulatory reporting thresholds (e.g., INR 50K, 10L)
+        # to detect actual regulatory structuring / smurfing.
         if len(sent) >= 3:
             ceiling = float(sent["amount"].max())
             if ceiling > 0:
@@ -392,13 +454,12 @@ def detect_typology(account_id: str) -> str:
                 near_ceiling = sent[(sent["amount"] >= low) & (sent["amount"] < high)]
                 if len(near_ceiling) >= 3:
                     typologies.append({
-                        "type": "STRUCTURING_PATTERN",
+                        "type": "LARGE_VALUE_CLUSTERING",
                         "description": (
                             f"{len(near_ceiling)} transactions clustered at 80-99% of "
-                            f"account ceiling ({ceiling:,.0f} synthetic units). "
-                            f"Pattern consistent with deliberate sub-threshold avoidance. "
-                            f"[Note: amounts are PaySim synthetic units — apply "
-                            f"institution-specific INR thresholds in production]"
+                            f"the account's maximum transaction value ({ceiling:,.0f} synthetic units). "
+                            f"Pattern indicates repetitive high-value transactions just below historical max. "
+                            f"[In production, validate against absolute compliance thresholds like INR 10 Lakhs]"
                         ),
                         "risk": "HIGH",
                         "evidence_txns": near_ceiling["txn_id"].tolist()[:5],

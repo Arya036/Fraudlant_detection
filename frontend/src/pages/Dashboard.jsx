@@ -18,7 +18,7 @@ export default function Dashboard({ setPage, setInitialAccount }) {
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth({}));
-    getAlerts(0, 10).then(d => setAlerts(Array.isArray(d?.alerts) ? d.alerts : [])).catch(() => setAlerts([]));
+    getAlerts(0, 100).then(d => setAlerts(Array.isArray(d?.alerts) ? d.alerts : [])).catch(() => setAlerts([]));
   }, []);
 
   function handleInvestigate(accountId) {
@@ -89,9 +89,9 @@ export default function Dashboard({ setPage, setInitialAccount }) {
           <div className="stat-card">
             <div className="stat-label"><AlertTriangle size={13} /> Active Alerts</div>
             <div className="stat-value" style={{ color: '#DC2626' }}>
-              {health?.database?.total_alerts ?? '294'}
+              {health?.database?.total_alerts != null ? Number(health.database.total_alerts).toLocaleString() : '294'}
             </div>
-            <div className="stat-sub">Open in queue</div>
+            <div className="stat-sub">Total open alerts</div>
           </div>
 
           {/* Stat: DB */}
@@ -134,7 +134,15 @@ export default function Dashboard({ setPage, setInitialAccount }) {
                       const tier = (a.severity || 'LOW').toUpperCase();
                       const rc   = getRiskClass(tier);
                       const accounts = (() => {
-                        try { return JSON.parse(a.accounts_involved || '[]'); } catch { return []; }
+                        try {
+                          return Array.isArray(a.accounts_involved)
+                            ? a.accounts_involved
+                            : typeof a.accounts_involved === 'string'
+                              ? JSON.parse(a.accounts_involved)
+                              : [];
+                        } catch {
+                          return [];
+                        }
                       })();
                       return (
                         <tr
@@ -162,6 +170,9 @@ export default function Dashboard({ setPage, setInitialAccount }) {
           <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="card-header">
               <span className="card-title"><TrendingUp size={15} />Risk Distribution</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Latest {alerts.length}{health?.database?.total_alerts ? ` of ${Number(health.database.total_alerts).toLocaleString()}` : ''}
+              </span>
             </div>
             <div className="card-body" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               {pieData.length > 0 ? (

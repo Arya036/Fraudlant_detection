@@ -1,7 +1,39 @@
 import { useState } from 'react';
-import { GitBranch, Search, AlertCircle, Network } from 'lucide-react';
+import { GitBranch, Search, AlertCircle, Network, Info } from 'lucide-react';
 import { getGraph } from '../api';
 import { getRiskColour, fmtAmount } from '../utils';
+
+const DEMO_ACCOUNTS = [
+  { id: 'C1953329646', label: 'mule' },
+  { id: 'C1885636303', label: 'mule' },
+  { id: 'C1953680528', label: 'critical' },
+  { id: 'C658156224',  label: 'critical' },
+];
+
+// Lightweight hover tooltip — no external deps / CSS required.
+function InfoTip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 4, cursor: 'help' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <Info size={12} style={{ color: 'var(--text-muted)' }} />
+      {show && (
+        <span style={{
+          position: 'absolute', bottom: '150%', left: '50%', transform: 'translateX(-50%)',
+          background: '#1e293b', color: '#f8fafc', padding: '7px 10px', borderRadius: 6,
+          fontSize: 11, lineHeight: 1.45, width: 230, zIndex: 50, fontWeight: 400,
+          textAlign: 'left', whiteSpace: 'normal', pointerEvents: 'none',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function SimpleForceGraph({ nodes, edges }) {
   if (!nodes || nodes.length === 0) return null;
@@ -83,12 +115,14 @@ export default function GraphView() {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
 
-  async function handleSearch() {
-    if (!input.trim()) return;
+  async function handleSearch(acct) {
+    const q = (typeof acct === 'string' ? acct : input).trim();
+    if (!q) return;
+    if (q !== input) setInput(q);
     setLoading(true);
     setError('');
     try {
-      const res = await getGraph(input.trim());
+      const res = await getGraph(q);
       setData(res);
     } catch (e) {
       setError(e.message);
@@ -143,10 +177,38 @@ export default function GraphView() {
         )}
 
         {!data && !loading && (
-          <div className="empty-state" style={{ marginTop: 60 }}>
-            <Network style={{ width: 48, height: 48 }} />
-            <h3>Enter an Account ID</h3>
-            <p>The graph engine builds a 2-hop ego-subgraph via SQL, runs mule scoring, and detects circular fund flows.</p>
+          <div style={{ marginTop: 24 }}>
+            {/* How it works */}
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 12 }}>How it works</div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {[
+                  ['1', 'Build ego-graph', 'A 2-hop subgraph is assembled from SQL around the account.'],
+                  ['2', 'Score & detect', 'NetworkX computes the mule score and scans for circular fund flows.'],
+                  ['3', 'Read the flow', 'Nodes are risk-coloured; edge weight reflects transaction amount.'],
+                ].map(([n, title, desc]) => (
+                  <div key={n} className="card" style={{ flex: '1 1 180px', minWidth: 180 }}>
+                    <div className="card-body">
+                      <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>{n}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Demo account chips */}
+            <div>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 10 }}>Try a demo account</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {DEMO_ACCOUNTS.map(a => (
+                  <button key={a.id} className="btn btn-outline btn-sm" style={{ fontFamily: 'monospace' }} onClick={() => handleSearch(a.id)}>
+                    {a.id}<span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>{a.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
@@ -209,15 +271,15 @@ export default function GraphView() {
                 </div>
                 <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {[
-                    ['In-degree',   profile.in_degree],
-                    ['Out-degree',  profile.out_degree],
-                    ['Total Received', fmtAmount(profile.total_received)],
-                    ['Total Sent',     fmtAmount(profile.total_forwarded)],
-                    ['Passthrough',    profile.passthrough_ratio != null ? profile.passthrough_ratio.toFixed(3) : '—'],
-                    ['Fan-out',        profile.fan_out_ratio != null ? profile.fan_out_ratio.toFixed(3) : '—'],
-                  ].map(([k, v]) => (
+                    ['In-degree',   profile.in_degree, 'Number of incoming transfer edges into this account in the 2-hop ego-graph.'],
+                    ['Out-degree',  profile.out_degree, 'Number of outgoing transfer edges from this account in the 2-hop ego-graph.'],
+                    ['Total Received', fmtAmount(profile.total_received), 'Sum of all amounts received by this account in the sampled window.'],
+                    ['Total Sent',     fmtAmount(profile.total_sent), 'Sum of all amounts sent by this account in the sampled window.'],
+                    ['Passthrough',    profile.passthrough_ratio != null ? profile.passthrough_ratio.toFixed(3) : '—', 'min(total sent \u00f7 total received, 1.0). Near 1.0 = funds received are almost fully forwarded \u2014 a classic mule pass-through signature.'],
+                    ['Fan-out',        profile.fan_out_ratio != null ? profile.fan_out_ratio.toFixed(3) : '—', 'Distinct receivers \u00f7 distinct senders. >1 disperses to more parties than it collects from (distribution / smurf-out); <1 consolidates (fan-in).'],
+                  ].map(([k, v, tip]) => (
                     <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                      <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                      <span style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}>{k}{tip && <InfoTip text={tip} />}</span>
                       <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{v ?? '—'}</span>
                     </div>
                   ))}

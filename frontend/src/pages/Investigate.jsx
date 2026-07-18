@@ -7,6 +7,38 @@ import {
 import { startInvestigation, pollInvestigation } from '../api';
 import { getRiskClass, getRiskColour, fmtAmount, fmtProb } from '../utils';
 
+const DEMO_ACCOUNTS = [
+  { id: 'C1953329646', label: 'mule' },
+  { id: 'C1885636303', label: 'mule' },
+  { id: 'C1953680528', label: 'critical' },
+  { id: 'C658156224',  label: 'critical' },
+];
+
+// Lightweight hover tooltip — no external deps / CSS required.
+function InfoTip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 4, cursor: 'help' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <Info size={12} style={{ color: 'var(--text-muted)' }} />
+      {show && (
+        <span style={{
+          position: 'absolute', bottom: '150%', left: '50%', transform: 'translateX(-50%)',
+          background: '#1e293b', color: '#f8fafc', padding: '7px 10px', borderRadius: 6,
+          fontSize: 11, lineHeight: 1.45, width: 230, zIndex: 50, fontWeight: 400,
+          textAlign: 'left', whiteSpace: 'normal', pointerEvents: 'none',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const TOOL_STEPS = [
   { key: 'history',    label: 'get_transaction_history',  emoji: '📋' },
   { key: 'graph',      label: 'get_transaction_graph',    emoji: '🕸️'  },
@@ -168,15 +200,15 @@ function STRResult({ result, accountId, onReset }) {
           </div>
           <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[
-              ['Mule Score',      typeof graphData.mule_score === 'number' ? graphData.mule_score.toFixed(4) : '—'],
-              ['Suspected Mule',  graphData.is_suspected_mule != null ? (graphData.is_suspected_mule ? '⚠ Yes' : '✓ No') : '—'],
-              ['In Circular Ring',graphData.in_ring != null ? (graphData.in_ring ? '⚠ Yes' : '✓ No') : '—'],
-              ['In-degree',       graphData.graph_profile?.in_degree ?? '—'],
-              ['Out-degree',      graphData.graph_profile?.out_degree ?? '—'],
-              ['Connected Accts', (graphData.connected_nodes || []).slice(0, 3).join(', ') || '—'],
-            ].map(([k, v]) => (
+              ['Mule Score',      typeof graphData.mule_score === 'number' ? graphData.mule_score.toFixed(4) : '—', 'Composite mule likelihood (0–1) from pass-through ratio, forwarding delay, sender/receiver spread, amount clustering, and KYC risk. ≥0.6 = suspected.'],
+              ['Suspected Mule',  graphData.is_suspected_mule != null ? (graphData.is_suspected_mule ? '⚠ Yes' : (acctData.transactions_received === 0 ? '✓ No (Originator (send-only))' : '✓ No')) : '—', 'Flagged when the mule score is ≥ 0.6.'],
+              ['In Circular Ring',graphData.in_ring != null ? (graphData.in_ring ? '⚠ Yes' : '✓ No') : '—', 'Whether this account sits inside a detected circular fund-flow (money looping back toward its origin).'],
+              ['In-degree',       graphData.graph_profile?.in_degree ?? '—', 'Number of incoming transfer edges into this account.'],
+              ['Out-degree',      graphData.graph_profile?.out_degree ?? '—', 'Number of outgoing transfer edges from this account.'],
+              ['Connected Accts', (graphData.connected_nodes || []).slice(0, 3).join(', ') || '—', 'Accounts reached via the time-ordered fund-flow trace (up to 3 shown). May be fewer than out-degree, which counts all graph edges.'],
+            ].map(([k, v, tip]) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                <span style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}>{k}{tip && <InfoTip text={tip} />}</span>
                 <span style={{ color: String(v).startsWith('⚠') ? 'var(--risk-high)' : String(v).startsWith('✓') ? 'var(--risk-low)' : 'var(--text-primary)', fontWeight: 500, maxWidth: 180, textAlign: 'right', wordBreak: 'break-all' }}>{v ?? '—'}</span>
               </div>
             ))}
@@ -200,8 +232,9 @@ function STRResult({ result, accountId, onReset }) {
               </div>
             </div>
             <div className="divider" />
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center' }}>
               Top SHAP Contributors (log-odds)
+              <InfoTip text="SHAP values show each feature's contribution to this account's fraud score, in log-odds. Positive (red) pushes toward fraud; negative (green) pulls away. The model's base/bias term is excluded." />
             </div>
             {topFeats.length > 0 ? topFeats.map((f, i) => (
               <ShapBar
@@ -413,6 +446,38 @@ export default function Investigate({ initialAccount, setInitialAccount }) {
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12, textAlign: 'center' }}>
               Typical run time: 30–90 seconds · Requires OpenAI API key configured in backend
             </p>
+
+            {/* Demo account chips */}
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 10, textAlign: 'center' }}>Try a demo account</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {DEMO_ACCOUNTS.map(a => (
+                  <button key={a.id} className="btn btn-outline btn-sm" style={{ fontFamily: 'monospace' }} onClick={() => handleStart(a.id)}>
+                    {a.id}<span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>{a.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* How it works */}
+            <div style={{ marginTop: 28 }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 12, textAlign: 'center' }}>How it works</div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {[
+                  ['1', 'Gather evidence', 'The agent pulls transaction history and builds the fund-flow graph.'],
+                  ['2', 'Score the risk', 'XGBoost scores fraud probability with SHAP; AML typologies are matched.'],
+                  ['3', 'Cite & draft', 'FATF/RBI/FinCEN passages are retrieved and a draft STR is generated.'],
+                ].map(([n, title, desc]) => (
+                  <div key={n} className="card" style={{ flex: '1 1 150px', minWidth: 150 }}>
+                    <div className="card-body">
+                      <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>{n}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

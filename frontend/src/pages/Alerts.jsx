@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react';
 import { Bell, ChevronRight, Filter, RefreshCw, AlertTriangle } from 'lucide-react';
-import { getAlerts } from '../api';
+import { getAlerts, getHealth } from '../api';
 import { getRiskClass, fmtAmount, timeAgo } from '../utils';
 
 const SEVERITIES = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 export default function Alerts({ setPage, setInitialAccount }) {
   const [alerts,   setAlerts]   = useState([]);
+  const [total,    setTotal]    = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [filter,   setFilter]   = useState('ALL');
   const [error,    setError]    = useState('');
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    getHealth().then(h => setTotal(h?.database?.total_alerts ?? null)).catch(() => {});
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -47,7 +51,11 @@ export default function Alerts({ setPage, setInitialAccount }) {
 
   function openInvestigation(a) {
     try {
-      const accounts = JSON.parse(a.accounts_involved || '[]');
+      const accounts = Array.isArray(a.accounts_involved)
+        ? a.accounts_involved
+        : typeof a.accounts_involved === 'string'
+          ? JSON.parse(a.accounts_involved)
+          : [];
       const id = accounts[0];
       if (id) { setInitialAccount(id); setPage('investigate'); }
     } catch {}
@@ -58,7 +66,7 @@ export default function Alerts({ setPage, setInitialAccount }) {
       <div className="page-header">
         <div>
           <h1 className="page-title">Alert Queue</h1>
-          <p className="page-subtitle">{alerts.length} alerts · Click any row to investigate</p>
+          <p className="page-subtitle">Showing {alerts.length}{total != null && total > alerts.length ? ` of ${Number(total).toLocaleString()}` : ''} alerts · Click any row to investigate</p>
         </div>
         <button className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
           <RefreshCw size={13} className={loading ? 'spinner' : ''} />
@@ -148,7 +156,13 @@ export default function Alerts({ setPage, setInitialAccount }) {
                     const tier  = (a.severity || 'LOW').toUpperCase();
                     const rc    = getRiskClass(tier);
                     let accounts = [];
-                    try { accounts = JSON.parse(a.accounts_involved || '[]'); } catch {}
+                    try {
+                      accounts = Array.isArray(a.accounts_involved)
+                        ? a.accounts_involved
+                        : typeof a.accounts_involved === 'string'
+                          ? JSON.parse(a.accounts_involved)
+                          : [];
+                    } catch {}
                     return (
                       <tr
                         key={i}

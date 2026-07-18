@@ -64,15 +64,31 @@ def format_str(
         )
     citation_section = "\n".join(citation_lines) if citation_lines else "  [No regulatory citations retrieved]"
 
-    # ── Feature importance section ────────────────────────────────────────
-    # Note: these are NOT SHAP values. They are feature_value × XGBoost
-    # tree importance scores — a heuristic proxy for feature contribution.
-    # sender_avg_amount dominates because its raw value (synthetic units)
-    # is large and multiplies a non-zero importance weight.
+    if typologies:
+        basis_note = "  Basis: Citations support the detected behavioral typologies listed in Section D."
+    elif risk_tier in ("CRITICAL", "HIGH"):
+        _score_txt = f"{fraud_prob:.4f}" if fraud_prob is not None else "not scored"
+        basis_note = f"  Basis: Citations support enhanced due diligence and transaction-monitoring obligations for high-risk accounts (XGBoost score = {_score_txt})."
+    else:
+        basis_note = "  Basis: General reference for compliance monitoring."
+
+    # SHAP feature contributions
+    # REAL SHAP values from XGBoost native pred_contribs=True (TreeExplainer-
+    # equivalent): true per-feature log-odds contributions, bias term dropped.
+    # predictor._get_shap_top_features falls back to a feature-importance proxy
+    # ONLY if native SHAP fails, and in that case sets shap_value=None, which we
+    # label honestly below (importance-proxy, not SHAP).
     feat_lines = []
     for f in top_features[:5]:
+        sv = f.get('shap_value')
+        if sv is None:
+            val = f.get('contribution', 0) or 0
+            label = 'importance-proxy'
+        else:
+            val = sv
+            label = 'SHAP'
         feat_lines.append(
-            f"  • {f.get('feature', '?')}: SHAP={f.get('shap_value') or f.get('contribution', 0):+.6f} ({f.get('direction', '')})"
+            f"  • {f.get('feature', '?')}: {label}={val:+.6f} ({f.get('direction', '')})"
         )
     feat_section = "\n".join(feat_lines) if feat_lines else "  • [Score not computed]"
 
@@ -97,11 +113,11 @@ SECTION A — ACCOUNT SUMMARY
   Total Transactions   : {summary.get('total_transactions', 'N/A')}
   Transactions Sent    : {summary.get('transactions_sent', 'N/A')}
   Transactions Received: {summary.get('transactions_received', 'N/A')}
-  Total Amount Sent    : {summary.get('total_amount_sent', 0):,.2f} (synthetic units)
-  Total Amount Received: {summary.get('total_amount_received', 0):,.2f} (synthetic units)
-  Avg Transaction      : {summary.get('avg_amount', 0):,.2f} (synthetic units)
-  Max Transaction      : {summary.get('max_amount', 0):,.2f} (synthetic units)
-  Period               : {summary.get('date_range', {}).get('earliest', '?')} -> {summary.get('date_range', {}).get('latest', '?')}
+  Total Amount Sent    : {(summary.get('total_amount_sent') or 0):,.2f} (synthetic units)
+  Total Amount Received: {(summary.get('total_amount_received') or 0):,.2f} (synthetic units)
+  Avg Transaction      : {(summary.get('avg_amount') or 0):,.2f} (synthetic units)
+  Max Transaction      : {(summary.get('max_amount') or 0):,.2f} (synthetic units)
+  Period               : {(summary.get('date_range') or {}).get('earliest', '?')} -> {(summary.get('date_range') or {}).get('latest', '?')}
   Fraud-flagged Txns   : {summary.get('fraud_flagged_count', 0)}
   High-risk Txns       : {summary.get('high_risk_count', 0)}
   Dataset Note         : Transaction amounts are PaySim synthetic units (not INR).
@@ -109,11 +125,11 @@ SECTION A — ACCOUNT SUMMARY
 
 SECTION B — GRAPH INTELLIGENCE
 ───────────────────────────────────────────────────────────────────────────────
-  In-degree (unique senders)   : {profile.get('in_degree', 'N/A')}
-  Out-degree (unique receivers): {profile.get('out_degree', 'N/A')}
-  Net Flow (recv-sent)         : {profile.get('net_flow', 0):,.2f} (synthetic units)
+  In-degree (incoming edges)   : {profile.get('in_degree', 'N/A')}
+  Out-degree (outgoing edges)  : {profile.get('out_degree', 'N/A')}
+  Net Flow (recv-sent)         : {(profile.get('net_flow') or 0):,.2f} (synthetic units)
   Max Fraud Prob on Node       : {profile.get('max_fraud_prob', 'N/A')}
-  Mule Score                   : {graph_data.get('mule_score', 0):.4f}
+  Mule Score                   : {(graph_data.get('mule_score') or 0):.4f}
   Is Suspected Mule            : {graph_data.get('is_suspected_mule', False)}
   In Circular Ring             : {graph_data.get('in_ring', False)}
   Ring IDs                     : {', '.join(graph_data.get('ring_ids', [])) or 'None'}
@@ -136,6 +152,7 @@ SECTION D — AML TYPOLOGY ANALYSIS
 
 SECTION E — REGULATORY BASIS (RAG Citations)
 ───────────────────────────────────────────────────────────────────────────────
+{basis_note}
   The following passages from real regulatory documents support this report:
 
 {citation_section}
