@@ -1,0 +1,637 @@
+================================================================================
+    PS6 IMPLEMENTATION GUIDE (v2) — AML INVESTIGATION AGENT (GenAI + Agentic RAG)
+    AI for Digital Public Safety: Defeating Counterfeiting, Fraud & Digital
+    Arrest Scams — Fraud Network Graph Intelligence Slice
+================================================================================
+
+This document is the complete reference for building the PS6 project.
+It covers: what PS6 is, what we are building, how FundFlow is reused,
+exactly which FundFlow files to keep and which not to touch, the dataset plan,
+the full architecture, and — critically — a HARD SPLIT between what ships for
+the hackathon and what is FYP/post-hackathon polish.
+
+Read this document completely before touching any code.
+
+
+>>> READ THIS FIRST: HACKATHON vs FYP <<<
+--------------------------------------------------------------------------------
+This project does double duty: it is both the hackathon submission AND the
+seed of the final-year project (FYP). Those have VERY different timelines.
+
+  HACKATHON DEADLINE : __________  (FILL THIS IN. Everything in PART A must be
+                                    demoable by this date. Nothing else matters
+                                    for judging.)
+  FYP DEADLINE       : end of semester (PART B — polish, not judged at hackathon)
+
+Do NOT build linearly across 15 weeks. Build PART A (a small, complete, working
+MVP) to the hackathon deadline. Only AFTER the hackathon do you touch PART B.
+If a task is not in PART A, it does not exist until the hackathon is over.
+
+
+================================================================================
+SECTION 1: WHAT PS6 IS ACTUALLY ASKING FOR
+================================================================================
+
+Problem Statement 6 — "AI for Digital Public Safety: Defeating Counterfeiting,
+Fraud & Digital Arrest Scams"
+
+The PS lists 5 illustrative components. We build a focused slice:
+
+COMPONENT A — Fraud Network Graph Intelligence (PRIMARY, REUSED)
+  Graph AI that analyses transaction data and account linkages to map
+  coordinated fraud, mule networks, and ring/chain patterns into an
+  investigation package. This is FundFlow's graph engine + a new agentic
+  layer on top.
+  NOTE: The PS wording mentions "court-admissible evidence." We do NOT claim
+  that. An AI-drafted report is an INTERNAL COMPLIANCE ARTIFACT (a draft STR),
+  not evidence and not court-admissible. We frame the output as a draft
+  Suspicious Transaction Report for a human analyst to review and file.
+
+COMPONENT B — Agentic STR Investigator (PRIMARY — this IS the FYP MVP)
+  An LLM agent (LangGraph) that, given a flagged alert or suspicious account,
+  autonomously plans an investigation by calling tools (transaction history,
+  graph analysis, risk scoring, regulation lookup, typology match) and outputs
+  a CITED draft Suspicious Transaction Report (STR) aligned to RBI / FIU-IND
+  guidance, with FATF / FinCEN as supporting international context.
+  → This IS the FYP. The hackathon is the MVP. The semester is the polish.
+
+COMPONENT C — Digital Arrest Scam Detector (DEMO ADD-ON, LOWEST PRIORITY)
+  A few-shot LLM classifier that takes a call transcript and flags likely
+  digital-arrest / fake-officer / KYC-freeze scams before money moves.
+  → Cheap to build, strong demo appeal (₹1,776 crore lost in first 9 months
+    of 2024 — extremely topical for judges). But it is a SEPARATE mini-project
+    that shares no pipeline with the AML agent. Treat it as garnish, not a
+    co-equal module. Build it LAST, and only if PART A is already solid.
+
+TERMINOLOGY NOTE (get this right — interviewers WILL test it):
+  - India: STR (Suspicious Transaction Report), filed with FIU-IND under PMLA.
+  - US   : SAR (Suspicious Activity Report), filed with FinCEN.
+  Because our regulatory framing is India-first (RBI, PMLA, digital-arrest
+  scams), the primary term is STR. Use "SAR" only when explicitly discussing
+  the US/FinCEN framework. Do not use them interchangeably.
+
+WHAT WE ARE NOT BUILDING (see Section 9): counterfeit currency CV, geospatial
+crime intelligence, WhatsApp/IVR citizen shield.
+
+JUDGING CRITERIA (design every decision against this):
+  Innovation        25%  ← Agentic RAG + autonomous STR drafting is the hook
+  Business Impact   25%  ← Real AML use case + ₹1,776cr digital-arrest angle
+  Technical Excel.  20%  ← Real reg corpus, SHAP, guardrails, measured eval
+  Scalability       15%  ← FastAPI, modular agent tools, vector store
+  User Experience   15%  ← Investigation console UI + a clean demo video
+
+
+================================================================================
+SECTION 2: WHAT WE ARE ACTUALLY BUILDING
+================================================================================
+
+THE PLATFORM: "SENTINEL AI — Fraud Network Intelligence & AML Investigation"
+
+MODULE 1: FRAUD NETWORK INTELLIGENCE ENGINE (reused from FundFlow, AS-IS)
+  - Transaction graph: fund flows, mule accounts, ring/chain patterns
+  - XGBoost risk scoring per transaction (score_risk tool)
+  - SHAP explainability per flagged alert
+  - Mule/ring detection (ring_id, chain_id, fan_out_ratio, mule_score)
+  - Exposed via FastAPI as callable tools for the agent
+  → For the hackathon this runs on FundFlow's EXISTING PaySim-trained model.
+    Do not retrain for the MVP. (See Section 3 and Section 5.)
+
+MODULE 2: AGENTIC AML INVESTIGATOR (the star of the show)
+  Given a flagged alert or account ID, the agent:
+    Step 1 → get_transaction_history(account_id) — from SQLite
+    Step 2 → get_transaction_graph(account_id)   — NetworkX subgraph
+    Step 3 → score_risk(transaction)             — FundFlow XGBoost engine
+    Step 4 → search_regulations(query)           — RAG over real FATF/FinCEN/RBI
+    Step 5 → detect_typology(pattern)            — structuring/layering/smurfing
+    Step 6 → synthesizes a CITED draft STR with risk score + rationale
+
+  IMPORTANT: If detect_typology is not finished by the hackathon deadline, the
+  agent ships with 4 tools (history, graph, score_risk, search_regulations).
+  Do not claim "5 tools" unless all 5 are actually wired in. See PART A.
+
+MODULE 3: DIGITAL ARREST SCAM CLASSIFIER (demo add-on, build LAST)
+  Few-shot GPT-4o-mini classifier over a pasted call transcript. Outputs:
+  scam probability, scam type, trigger phrases, recommended citizen action.
+  HONESTY: it is few-shot prompted on SYNTHETIC scripts and demoed on
+  SYNTHETIC scripts — that is circular and proves little about real scams.
+  Present it as a demonstrator, NOT a validated/trained model. Do not report
+  accuracy numbers for it.
+
+FULL ARCHITECTURE:
+
+  [Flagged Alert / Account ID / Call Transcript]
+           |
+           v
+  +--------------------------------------------------------+
+  |              SENTINEL AI PLATFORM                       |
+  |                                                        |
+  |  +---------------------+  +----------------------+     |
+  |  |  MODULE 1           |  |  MODULE 3            |     |
+  |  |  Fraud Graph Engine |  |  Digital Arrest      |     |
+  |  |  (FundFlow reused)  |  |  Scam Classifier     |     |
+  |  +---------+-----------+  +----------------------+     |
+  |            | tools exposed as FastAPI endpoints        |
+  |            v                                           |
+  |  +-------------------------------------------------+   |
+  |  |               MODULE 2: AGENT                   |   |
+  |  |  LangGraph orchestrator (function-calling LLM)  |   |
+  |  |  Plans -> calls tools -> reasons -> drafts STR  |   |
+  |  |                                                 |   |
+  |  |  Tools:                                         |   |
+  |  |  - get_transaction_history (SQL query tool)     |   |
+  |  |  - get_transaction_graph   (NetworkX tool)      |   |
+  |  |  - score_risk              (FundFlow XGBoost)   |   |
+  |  |  - search_regulations      (RAG tool)           |   |
+  |  |  - detect_typology         (pattern match tool) |   |
+  |  +-----------------+-------------------------------+   |
+  |                    |                                   |
+  |                    v                                   |
+  |  [Draft STR + Citations + Risk Score + Rationale]      |
+  +--------------------------------------------------------+
+
+
+================================================================================
+SECTION 3: DATASETS
+================================================================================
+
+3.1 TRANSACTION DATA (for graph engine and risk scoring)
+
+HACKATHON PRIMARY: PaySim (REUSE FundFlow's existing pipeline + trained model)
+  Why : FundFlow already loads it, already has a trained XGBoost model, already
+        builds the graph. It gives you a WORKING engine on day one. The new
+        value in PS6 is the AGENT, not the dataset. Do not spend hackathon time
+        swapping datasets for optics.
+  Note: PaySim has sender/receiver account fields, so the fraud-network graph
+        story works fine on it.
+
+POST-HACKATHON / FYP UPGRADE: IBM Transactions for AML (AMLSim)
+  URL     : https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml
+  Type    : Synthetic (purpose-built for AML research)
+  Contains: Account-level data + labeled laundering typologies (fan-out,
+            gather-scatter, stack, layering, scatter-gather, etc.)
+  Why later: Its labeled typologies are genuinely better for detect_typology
+             and for the FYP. BUT switching means a new loader, new schema,
+             re-derived features (AMLSim columns differ substantially from
+             PaySim — this is a REWRITE of feature engineering, not a rename),
+             and a full model retrain. That is FYP work, not hackathon work.
+  If judges ask "why PaySim?": say the agent layer is dataset-agnostic; PaySim
+  proves the pipeline end-to-end, and AMLSim is the planned upgrade for richer
+  labeled typologies. That is a stronger, more honest answer than a rushed swap.
+
+REAL-WORLD OPTION (talking point if judges push on synthetic data):
+  Elliptic++
+  URL : https://www.kaggle.com/datasets/ellipticco/elliptic-data-set
+  Type: REAL — 203K real Bitcoin transactions + 822K wallets, labeled.
+  Use : A credible "we know how to touch real graph data" answer. You do not
+        need to integrate it for the hackathon; know it exists and why it helps.
+
+3.2 RAG CORPUS (genuinely real — this is your strongest differentiator)
+
+These are REAL regulatory documents. Download and use as-is:
+
+  FATF Recommendations (2012, updated 2023)
+    URL: https://www.fatf-gafi.org/content/dam/fatf-gafi/recommendations/FATF%20Recommendations%202012.pdf
+    Focus: R.10 (CDD), R.16 (wire transfers), R.20 (suspicious transactions)
+
+  FinCEN SAR Activity Review (Trends, Tips & Issues)
+    URL: https://www.fincen.gov/resources/advisoriesfatfgafi/sar-activity-review-trends-tips-issues
+    Focus: structuring patterns, mule typologies, digital fraud (US context)
+
+  RBI KYC/AML Master Direction (2016, updated 2023)
+    URL: https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=11566
+    Focus: suspicious transaction indicators, mule identification, STR filing
+           (this is your PRIMARY, India-first source)
+
+  MHA Annual Report on Cybercrime (digital-arrest scam context)
+    URL: https://www.mha.gov.in/sites/default/files/AnnualReport_2023-24.pdf
+    Use: context for the digital-arrest scam add-on
+
+3.3 SYNTHETIC SCAM TRANSCRIPTS (for Module 3 demo add-on)
+
+No public dataset exists for digital-arrest scam transcripts. Generate ~50-100
+scam scripts + ~50-100 legitimate scripts with GPT-4o-mini and use them as
+few-shot examples. REMEMBER: this is a demonstrator, not a validated classifier
+(training and testing on the same synthetic distribution is circular). Do not
+put accuracy numbers on it.
+
+
+================================================================================
+SECTION 4: FUNDFLOW FILES — KEEP vs DO NOT USE
+================================================================================
+
+NOTE: DO NOT DELETE ANYTHING FROM THE FUNDFLOW FOLDER.
+The FundFlow folder is a separate, independent working project.
+In the PS6 folder (copy of FundFlow), you keep some files and gut/replace
+others. The originals in FundFlow remain untouched.
+
+--------------------------------------------------------------------------------
+FILES AND FOLDERS TO KEEP IN PS6 (Core reuse — do not modify the logic)
+--------------------------------------------------------------------------------
+
+  models/
+    predictor.py              <- The score_risk tool. Core reuse. Keep entirely.
+    saved/xgboost_fraud.pkl   <- Trained XGBoost model (PaySim). Keep and USE
+                                 AS-IS for the hackathon. Retrain on AMLSim is
+                                 FYP-only.
+    saved/model_metadata.json <- Model thresholds, feature list. Keep.
+    trainer.py                <- Keep. Only touched in PART B (AMLSim retrain).
+
+  graph/
+    fund_flow.py              <- get_transaction_graph tool. Keep entirely.
+    mule_detector.py          <- Mule score computation. Keep entirely.
+    ring_detector.py          <- Ring/chain/cycle detection. Keep entirely.
+    risk_propagation.py       <- Graph risk propagation. Keep entirely.
+
+  features/
+    engineering.py            <- Feature computation pipeline. Keep AS-IS for
+                                 the hackathon (it matches the PaySim model).
+                                 AMLSim adaptation is PART B.
+    graph_features.py         <- Graph-derived feature extraction. Keep.
+
+  explainability/
+    explain.py                <- SHAP explanations. Keep. Becomes score_risk
+                                 output.
+
+  scoring/
+    composite.py              <- 6-layer composite risk engine. Keep.
+
+  config.py                   <- DB path, thresholds, feature lists. Keep.
+                                 Point the DB path at the DB you actually use
+                                 (see the fundflow.db note below).
+
+  requirements.txt            <- Starting point. Add new deps (Section 7).
+
+--------------------------------------------------------------------------------
+FILES AND FOLDERS TO REPLACE/GUT IN PS6 (ignore or overwrite — do NOT delete)
+--------------------------------------------------------------------------------
+
+  dashboard/                  <- Not needed. PS6 uses Streamlit/Gradio.
+                                 REPLACE with: console/ (new Streamlit app).
+  api/main.py                 <- 1600+ lines of FundFlow-specific endpoints.
+                                 REPLACE with a clean PS6 FastAPI app exposing
+                                 only the agent tools.
+  api/routes/                 <- Replace with PS6 routes.
+  ingestion/simulator.py      <- Replay simulator. Not needed.
+  ingestion/loader.py         <- Loads PaySim CSV. KEEP for the hackathon MVP
+                                 (you are staying on PaySim). Replace only when
+                                 you move to AMLSim in PART B.
+  ingestion/preprocess.py     <- Same: keep for MVP, replace for AMLSim in PART B.
+  scoring/risk_engine.py      <- Keep but review; some logic is FundFlow-specific.
+  investigation/freeze_simulator.py  <- Not needed.
+  investigation/case_manager.py      <- Not needed (agent handles investigation).
+  alerts/generator.py         <- Not needed (agent drafts STRs, not alerts).
+  scripts/                    <- FundFlow demo scripts. Not needed.
+  kaggle_preprocess.py        <- Not needed.
+  export_feature_matrix.py    <- Not needed.
+  find_demo_account.py        <- Not needed (but a demo-account finder IS handy
+                                 for the video — you may adapt it).
+  inspect_db.py               <- Keep/adapt; a DB inspector is useful.
+  setup_and_run.py            <- Replace with PS6 setup.
+  run.py                      <- Replace with run_ps6.py.
+  data/augment.py             <- Not needed.
+
+  fundflow.db                 <- 205 MB PaySim-built SQLite DB.
+                                 DO NOT COPY into the PS6 folder. See the
+                                 dedicated note at the end of this section.
+  DataSet.csv                 <- PS2 dataset. Not relevant. Do not copy.
+  All .md/.txt/.pdf/.pptx docs <- FundFlow presentation materials. Keep in
+                                 FundFlow only; do not copy to PS6.
+
+--------------------------------------------------------------------------------
+NEW FILES AND FOLDERS TO CREATE IN PS6 (does not exist in FundFlow)
+--------------------------------------------------------------------------------
+
+  agent/
+    orchestrator.py           <- LangGraph agent. Core of the project.
+    tools.py                  <- The agent tools wrapped for LangGraph.
+    str_generator.py          <- Draft STR formatting + citation injection.
+    guardrails.py             <- Citation enforcement + evidence threshold.
+  rag/
+    corpus/                   <- Raw FATF/FinCEN/RBI PDFs
+    ingest.py                 <- Chunk + embed corpus into vector store
+    retriever.py              <- Retrieve with citations
+    vector_store/             <- Chroma/FAISS store (auto-created)
+  scam_classifier/            <- (PART B / demo add-on)
+    classifier.py
+    synthetic_scripts.py
+    data/scam_scripts.json, data/legit_scripts.json
+  console/
+    app.py                    <- Streamlit console (Submit alert -> STR;
+                                 graph view; RAG lookup; scam tab)
+  ingestion_amlsim/           <- (PART B only — AMLSim)
+    loader.py, preprocess.py, schema.sql
+  eval/                       <- (mostly PART B)
+    ragas_eval.py, retrieval_hitrate.py, str_quality.py, results/
+  Dockerfile                  <- (PART B)
+  docker-compose.yml          <- (PART B)
+  .github/workflows/ci.yml    <- (PART B)
+  requirements_ps6.txt
+  run_ps6.py
+  README_PS6.md
+
+--------------------------------------------------------------------------------
+WHY YOU DO NOT COPY fundflow.db INTO THE PS6 FOLDER
+--------------------------------------------------------------------------------
+  1. It is a GENERATED ARTIFACT, not source. It is built from CSV by the loader
+     and is fully reproducible. Generated/derived data is never copied or
+     committed — you regenerate it (same principle as node_modules or a build).
+  2. The code references a DB *path* (config.py / PS6_DB_PATH), not a bundled
+     file. The engine does not care where the file physically sits — point the
+     path at the DB you want. No duplication needed.
+  3. Size: 205 MB bloats the repo, the submission zip, and git (you would have
+     to gitignore it anyway). No upside.
+  CAVEAT: For the hackathon you ARE staying on PaySim, so you still need A
+  database. Do NOT copy it — instead point PS6_DB_PATH at the EXISTING
+  fundflow.db in the FundFlow folder, or regenerate a small sample DB. Only
+  when you move to AMLSim (PART B) do you build a brand-new SQLite DB.
+
+
+================================================================================
+SECTION 5: HOW FUNDFLOW IS USED AS A TOOL IN PS6
+================================================================================
+
+The FundFlow XGBoost engine becomes the score_risk tool in the agent.
+
+score_risk(transaction_dict) inside tools.py:
+  1. Takes a transaction dict (same format as FundFlow gateway)
+  2. Calls models/predictor.py -> predict_single()
+  3. Returns { fraud_probability, risk_tier, top_features (SHAP) }
+  The agent cites this in the STR, e.g.:
+    "XGBoost risk score: 0.89 (CRITICAL). Top SHAP drivers: amount_deviation
+     (+0.42), sender_txn_count_1h (+0.31), fan_out_ratio (+0.28) — consistent
+     with a velocity-burst pattern."
+  (Use REAL scores from your model at demo time, not placeholder numbers.)
+
+MODEL / DATASET NOTE:
+  For the hackathon, use xgboost_fraud.pkl AS-IS on PaySim. Do NOT retrain.
+  Retraining on AMLSim (different columns => re-derived features) is a PART B
+  task. Keeping the existing model is what makes Module 1 "free" on day one.
+
+get_transaction_graph: graph/fund_flow.py + graph/mule_detector.py return a
+  NetworkX subgraph for an account -> mule_score, ring_id, chain_id,
+  fan_out_ratio, 1st/2nd-degree connections -> evidence in the STR.
+
+get_transaction_history: SQL query against the SQLite DB -> last N transactions
+  for an account (amount, counterparty, timestamp) -> velocity/anomaly signals.
+
+search_regulations: the RAG tool. Query -> top-3 cited passages from the
+  FATF/FinCEN/RBI corpus with document name + page. The agent MUST cite; uncited
+  regulatory claims are rejected by guardrails.
+
+detect_typology: rule-based + graph-derived matcher:
+  - Structuring: multiple transactions just below reporting thresholds
+  - Layering:    sequential multi-hop movement (chain_id present)
+  - Smurfing:    one destination receiving from many sources (fan-out)
+  - Round-tripping: circular flow (ring_id present)
+  Reuses ring_detector.py + mule_detector.py. If not done by the deadline, the
+  MVP ships with 4 tools (see Section 2).
+
+
+================================================================================
+SECTION 6: BUILD PLAN
+================================================================================
+
+>>> The week numbers from the old plan are GONE. Build to the hackathon
+>>> deadline first (PART A). PART B is only after the hackathon. <<<
+
+--------------------------------------------------------------------------------
+PART A — HACKATHON MVP (everything here must be demoable by the deadline)
+--------------------------------------------------------------------------------
+Goal: one complete, working, impressive thing — the agent that turns a flagged
+account into a cited draft STR — plus a clean console and a 3-minute video.
+
+  A0. Setup (target: ~1 day)
+    [ ] Create PS6 folder as a copy of FundFlow (do NOT copy fundflow.db,
+        DataSet.csv, or the FundFlow docs/pptx).
+    [ ] Point PS6_DB_PATH at the existing fundflow.db (or a small sample DB).
+    [ ] Confirm the reused FundFlow engine runs: score_risk + graph on PaySim.
+    [ ] Download FATF, FinCEN, RBI (and MHA) PDFs into rag/corpus/.
+
+  A1. RAG pipeline + data tools (target: ~2-3 days)
+    [ ] rag/ingest.py  — chunk PDFs (~500 tokens, 50 overlap), embed with
+        sentence-transformers, store in Chroma.
+    [ ] rag/retriever.py — top-3 passages with document name + page.
+    [ ] Sanity test: query "PMLA structuring / STR threshold" -> expect an
+        RBI passage.
+    [ ] agent/tools.py — implement get_transaction_history + get_transaction_graph.
+    [ ] Minimal FastAPI app exposing /tools/history and /tools/graph.
+
+  A2. Agent + STR generation = SHIPPABLE MVP (target: ~2-3 days)
+    [ ] agent/orchestrator.py — LangGraph agent wired to the tools
+        (history, graph, score_risk, search_regulations; add detect_typology
+         only if time remains — otherwise ship 4 tools).
+    [ ] agent/str_generator.py — format the draft STR with citations.
+    [ ] agent/guardrails.py — citation enforcement + minimum-evidence check.
+    [ ] console/app.py — Streamlit: submit account -> agent runs -> draft STR.
+    [ ] End-to-end test: flagged account -> tool calls -> cited STR.
+    [ ] (Optional but strong) deploy to HF Spaces. Only claim "deployed" if it
+        reliably stays up; otherwise demo locally in the video. Do not put
+        "deployed live" on a resume for a flaky free-tier instance.
+
+  A3. Package for judging (target: ~1 day)
+    [ ] README_PS6.md with the architecture diagram (Section 2).
+    [ ] Presentation deck (mandatory deliverable).
+    [ ] Demo video (<=3 min): submit flagged account -> show tool calls ->
+        cited draft STR appears -> (if built) paste a scam transcript -> verdict.
+    [ ] If you ran any eval (A4 below), show the REAL measured numbers.
+
+  A4. (STRETCH — only if PART A above is fully done before the deadline)
+    [ ] detect_typology tool wired into the agent (upgrades MVP to 5 tools).
+    [ ] Digital-arrest scam classifier (Module 3) + a Streamlit tab.
+    [ ] A SMALL eval: build ~15-25 held-out reg queries with expected passages;
+        measure retrieval hit-rate. Optionally run RAGAS on a handful of cases.
+        Report the ACTUAL numbers you get — never pre-filled targets.
+
+--------------------------------------------------------------------------------
+PART B — POST-HACKATHON / FYP POLISH (do NOT start before the hackathon ends)
+--------------------------------------------------------------------------------
+  [ ] Migrate to IBM AMLSim: ingestion_amlsim/ loader + schema, re-derive
+      features (real rewrite), retrain trainer.py -> new xgboost_fraud.pkl.
+  [ ] Full RAGAS harness: faithfulness, context relevance/recall, answer
+      relevance on a proper held-out set. Report measured values only.
+  [ ] detect_typology hardening + typology coverage.
+  [ ] Digital-arrest classifier: move beyond circular synthetic eval if any
+      real/curated data becomes available; otherwise keep it framed as a demo.
+  [ ] Dockerfile + docker-compose (FastAPI + Streamlit + vector store).
+  [ ] .github/workflows/ci.yml — ruff lint + unit tests.
+  [ ] Structured logging (structlog) + feedback capture.
+
+
+================================================================================
+SECTION 7: REQUIREMENTS (requirements_ps6.txt)
+================================================================================
+
+# Existing FundFlow dependencies (keep)
+fastapi==0.110.0
+uvicorn==0.27.0
+pandas==2.2.0
+numpy==1.26.3
+scikit-learn==1.4.0
+xgboost==2.0.3
+networkx==3.2.1
+shap==0.44.1
+joblib==1.3.2
+python-multipart==0.0.6
+aiofiles==23.2.1
+
+# NEW — Agent + RAG (PART A)
+langchain>=0.2.0
+langchain-openai>=0.1.0
+langgraph>=0.1.0
+openai>=1.30.0
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+pypdf>=4.0.0           # PDF chunking for RAG corpus
+tiktoken>=0.7.0        # Token counting for chunking
+
+# NEW — Streamlit console (PART A)
+streamlit>=1.35.0
+plotly>=5.20.0
+
+# NEW — Eval (PART A stretch / PART B)
+ragas>=0.1.7
+
+# NEW — MLOps / utilities (mostly PART B)
+python-dotenv>=1.0.0
+structlog>=24.0.0
+ruff>=0.4.0
+
+
+================================================================================
+SECTION 8: ENVIRONMENT VARIABLES (.env for PS6)
+================================================================================
+
+# LLM API
+OPENAI_API_KEY=your_key_here
+
+# Database
+# HACKATHON: point this at the existing fundflow.db (do NOT copy it).
+# PART B (AMLSim): point this at the new sentinel.db you build.
+PS6_DB_PATH=/path/to/fundflow/fundflow.db
+
+# Vector store
+CHROMA_DB_PATH=./rag/vector_store
+
+# Agent config
+AGENT_MAX_STEPS=10
+AGENT_EVIDENCE_THRESHOLD=0.6
+AGENT_LLM_MODEL=gpt-4o-mini
+
+# Risk scoring
+FRAUD_THRESHOLD_BLOCK=0.70
+FRAUD_THRESHOLD_FLAG=0.30
+
+# Scam classifier (add-on)
+SCAM_CLASSIFIER_MODEL=gpt-4o-mini
+
+
+================================================================================
+SECTION 9: WHAT NOT TO BUILD (SCOPE DISCIPLINE)
+================================================================================
+
+Counterfeit Currency Detection
+  Requires CV (CNN/ResNet), banknote image datasets, mobile/PoS deployment.
+  Different stack, zero value to the fraud/AML story. Skip.
+
+Geospatial Crime Intelligence
+  Requires geocoded cybercrime complaint data (NCRP portal — not public).
+  No data = no feature. Skip.
+
+Citizen Fraud Shield (WhatsApp/IVR)
+  Requires WhatsApp Business API approval, IVR telephony, multi-language.
+  Massively out of scope. The scam classifier (add-on) gives the citizen angle
+  without the integration nightmare.
+
+Full FundFlow dashboard in PS6
+  The Streamlit console serves the same purpose and is faster. Judges evaluate
+  the agent and STR output, not dashboard aesthetics. Do not rebuild it.
+
+AMLSim swap / retrain during the hackathon
+  Real cost (new loader, new schema, re-derived features, retrain) for a
+  cosmetic reason. It is a PART B upgrade. During the hackathon, stay on PaySim.
+
+
+================================================================================
+SECTION 10: RESUME BULLETS (after completion — fill in REAL numbers)
+================================================================================
+
+RULE: Do NOT write a metric you have not measured. Leave blanks like <__>
+until you have the real number from your own eval run. A fabricated 0.94 that
+you cannot reproduce in an interview is worse than no number at all.
+
+Resume A — Finance / AML / Fraud Risk DS:
+  "Built an agentic AML investigation platform (Sentinel AI) that autonomously
+  drafts Suspicious Transaction Reports from transaction-graph analysis using a
+  LangGraph multi-tool agent, with a RAG pipeline over real FATF/FinCEN/RBI
+  regulations and citation-enforcing guardrails; XGBoost risk scoring with SHAP
+  explainability; FastAPI backend.
+  [Add ONLY if measured: AUC <__> on <dataset>; RAGAS faithfulness <__>;
+   retrieval hit-rate <__>.]"
+
+Resume C — MLE / GenAI:
+  "Designed a multi-tool LLM agent (LangGraph, function-calling, GPT-4o-mini)
+  over a RAG pipeline with citation guardrails and an evaluation harness;
+  FastAPI backend.
+  [Add ONLY if true: containerized with Docker; GitHub Actions CI; deployed on
+   HF Spaces/Render.]"
+
+
+================================================================================
+SECTION 11: INTERVIEW DEFENSE POINTS
+================================================================================
+
+Be able to answer these cold:
+
+1. Why agentic over a single RAG call?
+   Single RAG = one retrieval, one answer. Agentic = multiple tool calls,
+   reasoning between steps, accumulating evidence before drafting. A draft STR
+   needs transaction history + graph patterns + regulations cross-referenced —
+   inherently multi-step.
+
+2. How does your RAG pipeline work?
+   PDFs chunked to ~500 tokens (50 overlap) -> embedded with
+   sentence-transformers/all-MiniLM -> stored in Chroma -> cosine-similarity
+   retrieval -> top-3 passages returned with document name + page.
+
+3. What are your eval metrics and what do they mean?
+   Faithfulness: answer claims are supported by retrieved passages.
+   Context relevance: retrieved passages are actually relevant to the query.
+   Answer relevance: the answer addresses the question.
+   Context recall: all relevant passages were retrieved.
+   (Quote only numbers you actually measured.)
+
+4. How does FundFlow integrate?
+   models/predictor.py -> predict_single() is wrapped as the score_risk agent
+   tool; it returns fraud_probability + SHAP top features, cited in the STR.
+
+5. Why synthetic transaction data?
+   Real bank transaction data is legally inaccessible (privacy law). The AML
+   research community uses synthetic sets (PaySim, IBM AMLSim, SAML-D); we
+   disclose this. The RAG corpus (FATF/FinCEN/RBI) is genuine regulation — that
+   layer is real. Elliptic++ is available as a real-graph extension.
+
+6. STR or SAR — which and why?
+   STR is the Indian term (filed with FIU-IND under PMLA); SAR is the US term
+   (FinCEN). Our framing is India-first, so the output is a draft STR; FATF and
+   FinCEN are supporting international context.
+
+7. Is the output court-admissible evidence?
+   No. It is an internal compliance DRAFT for a human analyst to review and
+   file. We never claim it is evidence.
+
+8. What are your guardrails?
+   (a) Citation enforcement: no regulatory claim without a supporting retrieved
+   passage. (b) Evidence threshold: draft only generated after >=3 tool calls
+   and risk score above the flag threshold. (c) A string-match hallucination
+   check for regulatory names/dates not in retrieved passages — a heuristic,
+   not a guarantee (be honest about its false-positive/negative limits).
+
+9. The digital-arrest classifier — how good is it?
+   It is a few-shot demonstrator on synthetic scripts; training and testing on
+   the same synthetic distribution is circular, so I do not report accuracy for
+   it. It illustrates the citizen-protection angle; validating it needs real
+   data.
+
+================================================================================
+                     END OF PS6 IMPLEMENTATION GUIDE (v2)
+================================================================================
