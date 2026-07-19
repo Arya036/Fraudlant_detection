@@ -418,14 +418,18 @@ export default function Investigate({ initialAccount, setInitialAccount }) {
       <div className="page-body">
         {/* Idle state: input form */}
         {status === 'idle' && (
-          <div style={{ maxWidth: 560, margin: '0 auto' }}>
-            <div className="hero-card">
-              <div className="hero-tag"><Shield size={10} />Sentinel AI Agent</div>
-              <h2 className="hero-title" style={{ fontSize: 22 }}>Start Investigation</h2>
-              <p className="hero-sub">
-                The agent will call 5 tools: transaction history, fund flow graph,
-                XGBoost risk scoring, regulatory RAG, and AML typology detection.
-              </p>
+          <>
+          {/* Row 1: hero input + capability stats */}
+          <div className="bento-grid bento-4col">
+            <div className="hero-card col-span-2">
+              <div>
+                <div className="hero-tag"><Shield size={10} />Sentinel AI Agent</div>
+                <h2 className="hero-title" style={{ fontSize: 22 }}>Start Investigation</h2>
+                <p className="hero-sub">
+                  The agent autonomously calls 5 tools — transaction history, fund-flow graph,
+                  XGBoost risk scoring, regulatory RAG, and AML typology detection — then drafts a cited STR.
+                </p>
+              </div>
               <div className="hero-input-row">
                 <input
                   className="hero-input"
@@ -443,42 +447,166 @@ export default function Investigate({ initialAccount, setInitialAccount }) {
                 </button>
               </div>
             </div>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12, textAlign: 'center' }}>
-              Typical run time: 30–90 seconds · Requires OpenAI API key configured in backend
-            </p>
 
-            {/* Demo account chips */}
-            <div style={{ marginTop: 20 }}>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 10, textAlign: 'center' }}>Try a demo account</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                {DEMO_ACCOUNTS.map(a => (
-                  <button key={a.id} className="btn btn-outline btn-sm" style={{ fontFamily: 'monospace' }} onClick={() => handleStart(a.id)}>
-                    {a.id}<span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>{a.label}</span>
-                  </button>
-                ))}
-              </div>
+            <div className="stat-card">
+              <div className="stat-label"><Activity size={13} /> Agent Tools</div>
+              <div className="stat-value">5</div>
+              <div className="stat-sub">Autonomous ReAct loop</div>
             </div>
 
-            {/* How it works */}
-            <div style={{ marginTop: 28 }}>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 12, textAlign: 'center' }}>How it works</div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                {[
-                  ['1', 'Gather evidence', 'The agent pulls transaction history and builds the fund-flow graph.'],
-                  ['2', 'Score the risk', 'XGBoost scores fraud probability with SHAP; AML typologies are matched.'],
-                  ['3', 'Cite & draft', 'FATF/RBI/FinCEN passages are retrieved and a draft STR is generated.'],
-                ].map(([n, title, desc]) => (
-                  <div key={n} className="card" style={{ flex: '1 1 150px', minWidth: 150 }}>
-                    <div className="card-body">
-                      <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>{n}</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{title}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{desc}</div>
+            <div className="stat-card">
+              <div className="stat-label"><BarChart2 size={13} /> Model PR-AUC</div>
+              <div className="stat-value">0.72</div>
+              <div className="stat-sub">Recall@0.70 · 0.81</div>
+            </div>
+          </div>
+
+          {/* Demo chips */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 20 }}>
+            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Try a demo account</span>
+            {DEMO_ACCOUNTS.map(a => (
+              <button key={a.id} className="btn btn-outline btn-sm" style={{ fontFamily: 'monospace' }} onClick={() => handleStart(a.id)}>
+                {a.id}<span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>{a.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* How it works */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 12 }}>How it works</div>
+            <div className="bento-grid bento-3col">
+              {[
+                ['1', 'Gather evidence', 'The agent pulls transaction history and builds the 2-hop fund-flow graph.'],
+                ['2', 'Score the risk', 'XGBoost scores fraud probability with SHAP; AML typologies are matched.'],
+                ['3', 'Cite & draft', 'FATF/RBI/FinCEN passages are retrieved and a draft STR is generated.'],
+              ].map(([n, title, desc]) => (
+                <div key={n} className="card">
+                  <div className="card-body">
+                    <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>{n}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{title}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Illustrative sample report — fills space + previews the real output */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Example output</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', color: 'var(--text-muted)', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 20, padding: '2px 8px' }}>ILLUSTRATIVE — NOT LIVE DATA</span>
+            </div>
+            <div style={{ opacity: 0.6, pointerEvents: 'none', userSelect: 'none' }}>
+              <div className="bento-grid bento-3col">
+                {/* Account Summary */}
+                <div className="card">
+                  <div className="card-header">
+                    <span className="card-title"><FileText size={15} />Account Summary</span>
+                  </div>
+                  <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {[
+                      ['Total Transactions', '3'],
+                      ['Sent / Received', '2 / 1'],
+                      ['Total Sent', '11,17,819 units'],
+                      ['Avg Amount', '3,72,606 units'],
+                      ['Fraud-flagged', '1'],
+                      ['Period', '2023-01-04 → 2023-08-22'],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Graph Intelligence */}
+                <div className="card">
+                  <div className="card-header">
+                    <span className="card-title"><Network size={15} />Graph Intelligence</span>
+                  </div>
+                  <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {[
+                      ['Mule Score', '0.6695', 'var(--text-primary)'],
+                      ['Suspected Mule', '⚠ Yes', 'var(--risk-high)'],
+                      ['In Circular Ring', '✓ No', 'var(--risk-low)'],
+                      ['In-degree', '1', 'var(--text-primary)'],
+                      ['Out-degree', '2', 'var(--text-primary)'],
+                      ['Connected Accts', 'C880042118, C337651299', 'var(--text-primary)'],
+                    ].map(([k, v, c]) => (
+                      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                        <span style={{ color: c, fontWeight: 500, maxWidth: 180, textAlign: 'right', wordBreak: 'break-all' }}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ML Risk + SHAP */}
+                <div className="card">
+                  <div className="card-header">
+                    <span className="card-title"><BarChart2 size={15} />ML Risk Scoring</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>PR-AUC 0.72</span>
+                  </div>
+                  <div className="card-body">
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>XGBoost Score</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--risk-critical)', fontFamily: 'monospace' }}>0.9211</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Threshold: 0.70 · Recall@0.70: 0.81 · Precision: 0.29</div>
+                    </div>
+                    <div className="divider" />
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>Top SHAP Contributors (log-odds)</div>
+                    {[
+                      ['receiver_is_pure_receiver', 2.8119],
+                      ['passthrough_ratio', 1.4200],
+                      ['out_degree', 0.8800],
+                      ['txn_count', -0.3500],
+                    ].map(([f, v]) => (
+                      <ShapBar key={f} feature={f} value={v} maxAbs={2.8119} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bento-grid bento-3col mt-16">
+                {/* Typologies */}
+                <div className="card">
+                  <div className="card-header">
+                    <span className="card-title"><Activity size={15} />AML Typologies</span>
+                  </div>
+                  <div className="card-body">
+                    <div style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg-base)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: '3px solid var(--risk-high)' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--risk-high)', marginBottom: 3 }}>[HIGH] MULE_ACCOUNT</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Near-full pass-through of received funds with rapid onward dispersal to multiple receivers.</div>
                     </div>
                   </div>
-                ))}
+                </div>
+
+                {/* Citations */}
+                <div className="card col-span-2">
+                  <div className="card-header">
+                    <span className="card-title"><BookOpen size={15} />Regulatory Citations (RAG)</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>FATF · RBI · FinCEN · MHA</span>
+                  </div>
+                  <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {[
+                      ['FATF Recommendation 20', 'Report suspicious transactions promptly to the FIU where funds are suspected proceeds of crime.'],
+                      ['RBI Master Direction — KYC', 'Regulated entities must monitor and report accounts exhibiting mule-like pass-through behaviour.'],
+                    ].map(([src, text], i) => (
+                      <div key={src} className="citation-block">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span className="citation-source">[{i + 1}] {src}</span>
+                        </div>
+                        <p className="citation-text">{text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+          </>
         )}
 
         {/* Running */}

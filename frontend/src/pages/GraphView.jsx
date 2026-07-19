@@ -10,6 +10,25 @@ const DEMO_ACCOUNTS = [
   { id: 'C658156224',  label: 'critical' },
 ];
 
+// Illustrative sample used only for the idle-state preview (not live data).
+const SAMPLE_GRAPH = {
+  nodes: [
+    { id: 'C1953329646', risk_tier: 'CRITICAL' },
+    { id: 'C204418934',  risk_tier: 'HIGH' },
+    { id: 'C551718923',  risk_tier: 'MEDIUM' },
+    { id: 'C880042118',  risk_tier: 'LOW' },
+    { id: 'C337651299',  risk_tier: 'HIGH' },
+    { id: 'C712905643',  risk_tier: 'LOW' },
+  ],
+  edges: [
+    { from: 'C204418934', to: 'C1953329646', amount: 180000 },
+    { from: 'C551718923', to: 'C1953329646', amount: 95000 },
+    { from: 'C1953329646', to: 'C880042118', amount: 130000 },
+    { from: 'C1953329646', to: 'C337651299', amount: 140000 },
+    { from: 'C337651299', to: 'C712905643', amount: 70000 },
+  ],
+};
+
 // Lightweight hover tooltip — no external deps / CSS required.
 function InfoTip({ text }) {
   const [show, setShow] = useState(false);
@@ -207,6 +226,30 @@ export default function GraphView() {
                     {a.id}<span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>{a.label}</span>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Example graph preview — fills the empty canvas + previews the output */}
+            <div style={{ marginTop: 28 }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 12 }}>Example ego-graph</div>
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title"><Network size={15} />Sample fund-flow (illustrative)</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Build a graph above to see live data</span>
+                </div>
+                <div className="card-body" style={{ background: 'var(--bg-base)', borderRadius: '0 0 14px 14px' }}>
+                  <div style={{ opacity: 0.5, pointerEvents: 'none', filter: 'grayscale(0.15)' }}>
+                    <SimpleForceGraph nodes={SAMPLE_GRAPH.nodes} edges={SAMPLE_GRAPH.edges} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(label => (
+                      <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+                        <span style={{ width: 9, height: 9, borderRadius: '50%', background: getRiskColour(label) }} />
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
