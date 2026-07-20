@@ -1,0 +1,11 @@
+```powershell
+@"
+.venv/
+**/node_modules/
+.git/
+*.log
+frontend/dist/
+landing/.next/
+__pycache__/
+"@ | Out-File -Encoding ascii .dockerignore
+```

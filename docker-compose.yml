@@ -1,0 +1,39 @@
+# SENTINEL AI - Backend stack for Oracle Cloud Free Tier VM
+# Runs the FastAPI backend + Caddy (automatic free HTTPS via sslip.io).
+# Place at repo root next to Dockerfile.api and Caddyfile. Then: sudo docker compose up -d --build
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: sentinel-api
+    restart: unless-stopped
+    env_file:
+      - .env                      # holds OPENAI_API_KEY, AGENT_* etc. (copy from .env.example)
+    environment:
+      - PS6_DB_PATH=/data/fundflow.db
+      - CHROMA_DB_PATH=/data/rag/vector_store
+    volumes:
+      # Mount the big/generated data files from the host so you never rebuild the image for data.
+      - ./fundflow.db:/data/fundflow.db:ro          # read-only: app only queries it
+      - ./rag/vector_store:/data/rag/vector_store   # read-write: Chroma may open its sqlite
+    expose:
+      - "8000"                    # internal only; Caddy is the public entrypoint
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"                   # needed for HTTP->HTTPS + Let's Encrypt challenge
+      - "443:443"                 # public HTTPS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data          # stores the auto-issued TLS certs (persist!)
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
