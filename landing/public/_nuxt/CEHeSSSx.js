@@ -75814,7 +75814,7 @@ return (_ctx, _cache) => {
                           ]))
                         ], 2),
                         createVNode(_component_BaseButton, {
-                          label: "Enter with audio",
+                          label: "Start",
                           "on-click": onSoundEnableClick,
                           "has-animation-in": true,
                           "is-visible": unref(isLoadingDone),

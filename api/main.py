@@ -145,6 +145,7 @@ def _highest_risk_txn(account_id: str) -> Optional[dict]:
     if not row:
         return None
     return {
+        "txn_id":           row["txn_id"],
         "amount":           row["amount"],
         "txn_type":         row["txn_type"],
         "channel":          row["channel"],
@@ -322,6 +323,13 @@ def _deterministic_str_draft(account_id: str) -> str:
     even when the agent is rate-limited/unavailable."""
     try:
         from agent.str_generator import format_str
+        from agent.tools import (
+            get_transaction_history,
+            get_transaction_graph,
+            score_risk,
+            detect_typology,
+            search_regulations,
+        )
         history_data = _load_tool_json(get_transaction_history.func, account_id, 100000)
         graph_data   = _load_tool_json(get_transaction_graph.func, account_id)
         txn          = _highest_risk_txn(account_id) or {}

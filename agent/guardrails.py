@@ -38,7 +38,7 @@ def check_hallucination(str_text: str, citations: list[dict]) -> list[str]:
     """
     Check if the STR makes unsubstantiated regulatory claims.
 
-    Only checks _MUST_CITE_REGULATORS (FATF, FinCEN, SEBI).
+    Only checks _MUST_CITE_REGULATORS (FATF, FinCEN).
     _LEGISLATIVE_REFS (PMLA, RBI, FIU-IND) are whitelisted because they appear
     in the STR template as statutory filing-basis references, not as claims
     requiring RAG evidence.
