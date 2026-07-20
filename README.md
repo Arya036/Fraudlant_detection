@@ -48,11 +48,11 @@ A compliance analyst enters one account ID. The AI agent takes over: it queries 
 
 | Landing | Investigation (live agent) |
 |---|---|
-| ![Landing page](docs/screenshots/landing.png) | ![Investigate page](docs/screenshots/investigate.png) |
+| ![Dashboard](docs/screenshots/Dashboard page.png) | ![Investigate page](docs/screenshots/Investigate page.png) |
 
 | Fund-flow graph | Draft STR output |
 |---|---|
-| ![Graph view](docs/screenshots/graph.png) | ![STR output](docs/screenshots/str.png) |
+| ![Graph view](docs/screenshots/Graph view page.png) | ![STR output](docs/screenshots/STR output page.png) |
 
 <!-- Even better: add a short demo GIF here -->
 <!-- ![Demo](docs/screenshots/demo.gif) -->
@@ -413,10 +413,8 @@ Built on top of the ML foundation:
 
 ## Team
 
-**Team Cypher** — PS6 Hackathon 2026
+**Team SPIRIT** — PS6 Hackathon 2026
 *AI for Digital Public Safety*
-
-> _Note: the landing-page footer currently reads "TEAM SPIRIT" — align it with the team name before submitting._
 
 ---
 
