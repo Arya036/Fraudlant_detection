@@ -117,7 +117,7 @@ flowchart TD
 - Full NetworkX DiGraph construction with weighted edges (transaction amount) and node risk attributes.
 
 ### ML Risk Scoring
-- XGBoost model trained on the PaySim synthetic dataset (`scale_pos_weight` tuned for class imbalance, `eval_metric=aucpr`).
+- XGBoost model trained on our PaySim-derived, Indian-adapted dataset (`scale_pos_weight` tuned for class imbalance, `eval_metric=aucpr`).
 - SHAP explainability via XGBoost's native `predict_contribs()`: top-5 feature contributions per prediction.
 - Risk tiers: LOW / MEDIUM / HIGH / CRITICAL with configurable thresholds.
 
@@ -339,11 +339,19 @@ High-risk demo accounts — every transaction on each is fraud-flagged in the da
 
 | Data | Source | Status |
 |---|---|---|
-| Transaction data | PaySim (synthetic) — FundFlow-augmented | Synthetic — amounts are not INR |
+| Transaction data | PaySim → transformed to Indian banking context (NEFT/UPI/IMPS/ATM/DEPOSIT, Indian branches & channels) → FundFlow-augmented | Synthetic base — amounts are not INR |
 | Fraud rate (1.84%) | FundFlow rebalanced PaySim | Higher than raw PaySim's ~0.13% by design |
 | Regulatory corpus | Real PDFs (FATF, RBI, FinCEN, MHA) | Real regulatory documents |
 
-> **Disclosure:** All transaction data is synthetic (PaySim-derived). Amounts are in synthetic units, not INR. Absolute regulatory thresholds (e.g. PMLA ₹10L) are not applicable to this dataset. The fraud rate of 1.84% reflects FundFlow's rebalanced training set. All STR outputs are internal compliance drafts for human analyst review — not court-admissible evidence.
+**How PaySim was adapted to an Indian banking context** (`ingestion/preprocess.py`):
+- **Transaction types → Indian rails:** `TRANSFER→NEFT`, `PAYMENT→UPI`, `DEBIT→IMPS`, `CASH_OUT→ATM`, `CASH_IN→DEPOSIT`
+- **Branches:** each account is deterministically mapped to one of 25 Indian branch codes across 16 cities (Mumbai, Delhi, Chennai, Bengaluru, Hyderabad, Kolkata, Pune, …)
+- **Channels:** `mobile` / `internet` / `branch` added with a mobile-first weighting (0.45 / 0.35 / 0.20) and a night-hours skew toward digital channels
+- **Timestamps:** PaySim's hourly `step` expanded into realistic datetime values
+- **Schema:** columns renamed to an Indian-bank format (`sender_account`, `sender_branch`, `is_fraud`, …)
+- **AML typologies:** smurfing, round-tripping, rapid multi-hop, and dormant-account activation injected via `data/augment.py`
+
+> **Disclosure:** All transaction data is synthetic (PaySim-derived, then transformed into an Indian banking schema — see `ingestion/preprocess.py`). Amounts are in synthetic units, not INR. Absolute regulatory thresholds (e.g. PMLA ₹10L) are not applicable to this dataset. The fraud rate of 1.84% reflects FundFlow's rebalanced training set. All STR outputs are internal compliance drafts for human analyst review — not court-admissible evidence.
 
 ---
 
@@ -361,7 +369,7 @@ High-risk demo accounts — every transaction on each is fraud-flagged in the da
 
 ## Limitations & Honest Disclosures
 
-1. **Synthetic data** — The XGBoost model is trained on PaySim (a synthetic mobile-money dataset, not Indian bank data). Graph patterns reflect synthetic behaviour. The architecture is data-agnostic and would work on real transaction exports.
+1. **Synthetic base data, transformed to an Indian banking context** — We start from **PaySim** (a synthetic mobile-money dataset) and transform it into an Indian bank transaction dataset via `ingestion/preprocess.py`: PaySim's payment types are remapped to Indian rails (`TRANSFER→NEFT`, `PAYMENT→UPI`, `DEBIT→IMPS`, `CASH_OUT→ATM`, `CASH_IN→DEPOSIT`), accounts are assigned Indian branch codes across 16 cities, transaction channels (mobile/internet/branch) and realistic timestamps are added, and columns are renamed to an Indian-bank schema. AML typologies are then injected via `data/augment.py`. The data remains **synthetic** — the underlying behavioural patterns are PaySim's and amounts are in synthetic units, not INR — but the schema and semantics mirror a real Indian bank export, and the architecture is data-agnostic enough to run on one.
 2. **No real-time streaming** — Transactions are batch-loaded into SQLite, not ingested in real-time.
 3. **Graph is ego-subgraph only** — For performance, graph analysis is scoped to the 2-hop neighbourhood. The full 499K-transaction graph is not traversed during investigation.
 4. **STR is a draft** — All outputs require human compliance officer review before any regulatory filing.
