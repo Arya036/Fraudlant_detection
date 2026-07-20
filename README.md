@@ -42,20 +42,15 @@ A compliance analyst enters one account ID. The AI agent takes over: it queries 
 
 ## Screenshots
 
-> _Drop your images into `docs/screenshots/` and they'll render below. Suggested captures: the landing page, the Investigate page mid-run (agent logs streaming), the GraphView fund-flow graph, and a rendered STR._
-
-<!-- Replace these placeholders with real screenshots before submitting. -->
-
 | Landing | Investigation (live agent) |
 |---|---|
-| ![Dashboard](docs/screenshots/Dashboard page.png) | ![Investigate page](docs/screenshots/Investigate page.png) |
+| ![Dashboard](docs/screenshots/Dashboard.png) | ![Investigate page](docs/screenshots/Investigate.png) |
 
 | Fund-flow graph | Draft STR output |
 |---|---|
-| ![Graph view](docs/screenshots/Graph view page.png) | ![STR output](docs/screenshots/STR output page.png) |
+| ![Graph view](docs/screenshots/Graphview.png) | ![STR output](docs/screenshots/STR_output.png) |
 
-<!-- Even better: add a short demo GIF here -->
-<!-- ![Demo](docs/screenshots/demo.gif) -->
+
 
 ---
 
