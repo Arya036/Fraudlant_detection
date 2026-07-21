@@ -480,17 +480,142 @@ def _graph_edges_from_sql(account_id: str):
 
 @app.post("/tools/graph", tags=["Tools"])
 def get_graph(req: GraphRequest):
-    """Build the transaction network for an account. Used by Graph View page."""
+    """Build the multi-hop transaction network for an account. Used by Graph View page.
+
+    Tier-2 engine: expands the account's neighbourhood up to max_hops from SQLite,
+    builds the real FundFlowGraph, then runs causal fund-flow tracing, mule scoring,
+    and ring (cycle) detection. Any failure degrades gracefully to a flat SQL view.
+    """
     try:
-        from graph.fund_flow import build_ego_graph
-        from graph.mule_detector import score_mule
-        from graph.ring_detector import detect_rings
+        import pandas as pd
+        from graph.fund_flow import FundFlowGraph
+        from graph.mule_detector import compute_mule_scores
+        from graph.ring_detector import find_cycles, get_ring_summary
 
-        G = build_ego_graph(req.account_id, max_hops=req.max_hops)
-        mule_result = score_mule(G, req.account_id)
-        ring_result = detect_rings(G, req.account_id)
+        max_hops     = max(1, min(int(req.max_hops or 2), 4))   # clamp 1..4
+        MAX_TXNS     = 4000     # hard cap on edges pulled (memory/latency guard)
+        MAX_FRONTIER = 300      # cap accounts expanded per hop (SQL IN-size guard)
 
-        nodes, edges = _graph_edges_from_sql(req.account_id)
+        # --- 1. BFS-expand the neighbourhood from SQLite -------------------
+        conn = _get_db()
+        seen_accounts = {req.account_id}
+        frontier      = [req.account_id]
+        rows_by_txn   = {}
+        for _hop in range(max_hops):
+            if not frontier or len(rows_by_txn) >= MAX_TXNS:
+                break
+            batch_accounts = frontier[:MAX_FRONTIER]
+            ph = ",".join("?" * len(batch_accounts))
+            q = (
+                "SELECT txn_id, timestamp, sender_account, receiver_account, "
+                "amount, txn_type, fraud_probability, is_fraud "
+                "FROM transactions "
+                f"WHERE sender_account IN ({ph}) OR receiver_account IN ({ph}) "
+                "LIMIT ?"
+            )
+            batch = conn.execute(
+                q, batch_accounts + batch_accounts + [MAX_TXNS]
+            ).fetchall()
+            next_frontier = []
+            for r in batch:
+                if len(rows_by_txn) >= MAX_TXNS:
+                    break
+                if r["txn_id"] in rows_by_txn:
+                    continue
+                rows_by_txn[r["txn_id"]] = dict(r)
+                for acct in (r["sender_account"], r["receiver_account"]):
+                    if acct not in seen_accounts:
+                        seen_accounts.add(acct)
+                        next_frontier.append(acct)
+            frontier = next_frontier
+        conn.close()
+
+        if not rows_by_txn:
+            return {
+                "account_id": req.account_id,
+                "nodes": [], "edges": [],
+                "stats": {"total_nodes": 0, "total_edges": 0, "high_risk_edges": 0},
+                "graph_analysis": {}, "engine": "graph",
+            }
+
+        df = pd.DataFrame(list(rows_by_txn.values()))
+
+        # --- 2. Build the real fund-flow graph ----------------------------
+        fg = FundFlowGraph()
+        fg.build_from_df(df)
+        Gnx = fg.G
+
+        # --- 3. Mule scoring (needs a 'step' column; synthesize if absent) -
+        if "step" not in df.columns:
+            _ts = pd.to_datetime(df["timestamp"], errors="coerce")
+            df = df.assign(
+                step=((_ts - _ts.min()).dt.total_seconds() // 3600)
+                .fillna(0).astype(int)
+            )
+        try:
+            mule_df = compute_mule_scores(Gnx, df)
+        except Exception as _me:
+            logger.warning("mule scoring failed: %s", _me)
+            mule_df = pd.DataFrame(
+                columns=["account", "mule_score", "is_suspected_mule",
+                         "passthrough_ratio", "unique_senders",
+                         "unique_receivers", "avg_fwd_delay_min"]
+            )
+        mule_lookup = (dict(zip(mule_df["account"], mule_df["mule_score"]))
+                       if len(mule_df) else {})
+
+        subj = mule_df[mule_df["account"] == req.account_id] if len(mule_df) else mule_df
+        if len(subj):
+            m = subj.iloc[0]
+            mule_score    = float(m["mule_score"])
+            is_mule       = bool(int(m["is_suspected_mule"]))
+            graph_profile = {
+                "passthrough_ratio": float(m.get("passthrough_ratio", 0) or 0),
+                "unique_senders":    int(m.get("unique_senders", 0) or 0),
+                "unique_receivers":  int(m.get("unique_receivers", 0) or 0),
+                "avg_fwd_delay_min": (None if pd.isna(m.get("avg_fwd_delay_min"))
+                                      else float(m.get("avg_fwd_delay_min"))),
+            }
+        else:
+            mule_score, is_mule, graph_profile = 0.0, False, {}
+
+        # --- 4. Causal multi-hop fund-flow trace from the subject ---------
+        try:
+            trace = fg.trace_fund_flow(req.account_id, max_hops=max_hops)
+        except Exception as _te:
+            logger.warning("fund-flow trace failed: %s", _te)
+            trace = {"paths": [], "nodes": [], "edges": [], "summary": {}}
+
+        # --- 5. Ring / cycle detection (guarded: simple_cycles can explode)-
+        subj_rings, ring_summary = [], {}
+        if Gnx.number_of_nodes() <= 200 and Gnx.number_of_edges() <= 600:
+            try:
+                rings        = find_cycles(Gnx, max_length=6)
+                subj_rings   = [r for r in rings if req.account_id in r["accounts"]]
+                ring_summary = get_ring_summary(rings)
+            except Exception as _re:
+                logger.warning("ring detection failed: %s", _re)
+        else:
+            ring_summary = {"note": "ring detection skipped (neighbourhood too large)"}
+
+        # --- 6. Build nodes + edges for the frontend from the real graph --
+        nodes = [
+            {
+                "id":         n,
+                "is_subject": n == req.account_id,
+                "mule_score": round(float(mule_lookup.get(n, 0.0)), 4),
+            }
+            for n in Gnx.nodes()
+        ]
+        edges = []
+        for u, v, data in Gnx.edges(data=True):
+            edges.append({
+                "from":       u,
+                "to":         v,
+                "amount":     round(float(data.get("amount", 0) or 0), 2),
+                "fraud_prob": round(float(data.get("fraud_prob", 0) or 0), 4),
+                "txn_type":   data.get("txn_type") or "UNKNOWN",
+            })
         high_risk = sum(1 for e in edges if e["fraud_prob"] > 0.7)
 
         return {
@@ -501,17 +626,24 @@ def get_graph(req: GraphRequest):
                 "total_nodes":     len(nodes),
                 "total_edges":     len(edges),
                 "high_risk_edges": high_risk,
+                "hops_expanded":   max_hops,
             },
             "graph_analysis": {
-                "mule_score":        mule_result.get("mule_score"),
-                "is_suspected_mule": mule_result.get("is_suspected_mule"),
-                "in_ring":           ring_result.get("in_ring"),
-                "ring_count":        ring_result.get("ring_count", 0),
-                "graph_profile":     mule_result.get("graph_profile", {}),
+                "mule_score":        mule_score,
+                "is_suspected_mule": is_mule,
+                "in_ring":           len(subj_rings) > 0,
+                "ring_count":        len(subj_rings),
+                "rings":             subj_rings[:5],
+                "ring_summary":      ring_summary,
+                "graph_profile":     graph_profile,
+                "fund_flow":         trace.get("summary", {}),
+                "fund_flow_paths":   trace.get("edges", [])[:50],
             },
+            "engine": "graph",
         }
-    except ImportError as e:
-        logger.warning("Graph engine import failed (%s), using SQL fallback", e)
+
+    except Exception as e:
+        logger.warning("Graph engine failed (%s), using SQL fallback", e)
         try:
             nodes, edges = _graph_edges_from_sql(req.account_id)
             return {
@@ -520,12 +652,10 @@ def get_graph(req: GraphRequest):
                 "edges":      edges,
                 "stats":      {"total_nodes": len(nodes), "total_edges": len(edges)},
                 "graph_analysis": {},
+                "engine": "sql_fallback",
             }
         except Exception as e2:
             raise HTTPException(status_code=500, detail=str(e2))
-    except Exception as e:
-        logger.error("Graph error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── RAG tool ──────────────────────────────────────────────
