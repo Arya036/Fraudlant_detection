@@ -1,26 +1,30 @@
 """
-api/main.py — Sentinel AI FastAPI Backend  (HARDENED v1.2)
-===========================================================
+api/main.py — Sentinel AI FastAPI Backend  (HARDENED)
+=====================================================
 Exposes the LangGraph agent and tool suite as a REST API.
 The React frontend consumes these endpoints.
 
 KEY ARCHITECTURE (why this version is resilient):
-    Every structured investigation CARD (account summary, graph intelligence,
-    ML risk, SHAP, typologies, citations) is a deterministic DB / engine /
-    embedding output — NONE of them need the LLM. The 5 agent tools
-    (get_transaction_history, get_transaction_graph, score_risk,
-    detect_typology, search_regulations) are all LLM-free.
+    The structured investigation CARDS (account summary, graph intelligence,
+    ML risk, SHAP, typologies, citations) are ALL deterministic DB / engine /
+    embedding outputs. They do NOT need the LLM.
 
-    So we compute the cards ALWAYS, directly from the tools, independent of the
-    agent. The LLM is used only for the STR *prose* (str_draft). If the LLM
-    fails (e.g. OpenAI rate limit) the cards still render fully; we just mark
-    the narrative unavailable. A rate limit degrades the demo gracefully
-    instead of blanking it.
-
-Field mappings below are matched to the ACTUAL return shapes in agent/tools.py.
+    So we compute them ALWAYS, independent of the agent. The LLM is used only
+    for the STR *prose* (str_draft). If the LLM fails (e.g. OpenAI rate limit),
+    we keep every card populated and simply mark the narrative as unavailable.
+    A rate limit therefore DEGRADES the demo gracefully instead of blanking it.
 
 Run:
     uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+Endpoints:
+    GET  /health                   — platform stats
+    POST /investigate              — start investigation job (async)
+    GET  /investigate/{job_id}     — poll job status / get result
+    POST /tools/graph              — build transaction network graph
+    POST /tools/rag                — search regulatory corpus
+    GET  /alerts                   — list database alerts
+    GET  /transactions/{account_id}— raw transaction history
 """
 
 import os
@@ -59,6 +63,7 @@ DISCLAIMER = (
 )
 
 # ── In-memory job store ───────────────────────────────────────
+# Format: { job_id: { status, account_id, payload, error, started_at } }
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
@@ -66,7 +71,7 @@ _jobs_lock = threading.Lock()
 app = FastAPI(
     title="Sentinel AI — AML Investigation API",
     description="Autonomous AML investigation platform for PS6 hackathon.",
-    version="1.2.0",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -74,11 +79,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173", "http://localhost:5174",
-        "http://localhost:3000", "http://localhost:4173",
-        "http://127.0.0.1:5173", "http://127.0.0.1:5174",
-        "http://127.0.0.1:3000", "http://127.0.0.1:4173",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://localhost:4173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:4173",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -87,7 +97,7 @@ app.add_middleware(
 )
 
 
-# ── DB helpers ───────────────────────────────────────────
+# ── DB helper ────────────────────────────────────────────
 def _get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -120,47 +130,12 @@ def _chroma_ready() -> bool:
         return False
 
 
-def _highest_risk_txn(account_id: str) -> Optional[dict]:
-    """Return the account's single highest-risk REAL transaction as a dict shaped
-    for score_risk(). This replaces the old score_risk(account_id, {}) call, which
-    scored an EMPTY transaction and produced a meaningless probability + SHAP.
-
-    We score the account's most suspicious actual transaction so the ML Risk card
-    and SHAP drivers describe something real.
-    """
-    try:
-        conn = _get_db()
-        row = conn.execute("""
-            SELECT txn_id, timestamp, sender_account, receiver_account,
-                   amount, txn_type, channel, fraud_probability, is_fraud
-            FROM transactions
-            WHERE sender_account = ? OR receiver_account = ?
-            ORDER BY is_fraud DESC, fraud_probability DESC, amount DESC
-            LIMIT 1
-        """, (account_id, account_id)).fetchone()
-        conn.close()
-    except Exception as e:
-        logger.error("_highest_risk_txn failed for %s: %s", account_id, e)
-        return None
-    if not row:
-        return None
-    return {
-        "txn_id":           row["txn_id"],
-        "amount":           row["amount"],
-        "txn_type":         row["txn_type"],
-        "channel":          row["channel"],
-        "timestamp":        row["timestamp"],
-        "sender_account":   row["sender_account"],
-        "receiver_account": row["receiver_account"],
-    }
-
-
 # ═══════════════════════════════════════════════════════════════
 # DETERMINISTIC SECTION BUILDER  (no LLM required)
 # ═══════════════════════════════════════════════════════════════
 
 def _load_tool_json(tool_func, *args, **kwargs):
-    """Call a tool's underlying .func and parse its JSON string result.
+    """Call a LangChain tool's underlying .func and parse its JSON string result.
     Returns {} on any failure so one broken tool never blanks the whole card set."""
     try:
         raw = tool_func(*args, **kwargs)
@@ -168,23 +143,13 @@ def _load_tool_json(tool_func, *args, **kwargs):
             return raw
         return json.loads(raw)
     except Exception as e:
-        logger.error("Tool call failed (%s): %s", getattr(tool_func, "__name__", tool_func), e)
+        logger.error("Tool call %s failed: %s", getattr(tool_func, "__name__", tool_func), e)
         return {}
 
 
-def _extract_results(parsed):
-    """retrieve_regulations() may return a bare list OR a dict with a 'results' key.
-    Handle both so the citations card never crashes on shape."""
-    if isinstance(parsed, list):
-        return parsed
-    if isinstance(parsed, dict):
-        return parsed.get("results") or []
-    return []
-
-
 def _pick_number(feature: dict):
-    """shap_value if present (even 0.0), else contribution, else 0.0.
-    Explicit None checks so a legitimate 0.0 SHAP value is NOT dropped."""
+    """Return shap_value if present (even when it is 0.0), else contribution, else 0.0.
+    NOTE: uses explicit None checks so a legitimate 0.0 SHAP value is NOT dropped."""
     sv = feature.get("shap_value")
     if sv is None:
         sv = feature.get("contribution")
@@ -193,26 +158,17 @@ def _pick_number(feature: dict):
     return sv
 
 
-def _rag_query_for(typology_types: list) -> str:
-    """Finding-driven RAG query. Matches the exact typology 'type' strings emitted
-    by detect_typology in agent/tools.py."""
-    if "MULE_ACCOUNT" in typology_types:
-        return "money mule layering intermediary pass-through accounts"
-    if "ROUND_TRIPPING" in typology_types:
-        return "circular trading round tripping fund flow loops"
-    if "LARGE_VALUE_CLUSTERING" in typology_types:
-        return "structuring suspicious transaction threshold avoidance reporting"
-    if "SMURFING_FAN_IN" in typology_types:
-        return "smurfing structuring fan-in multiple senders single beneficiary"
-    if "VELOCITY_BURST" in typology_types:
-        return "rapid high velocity transactions monitoring suspicious activity"
-    return "general compliance transaction monitoring reporting guidelines"
+def _build_sections(account_id: str, result: Optional[dict]) -> dict:
+    """Build all structured cards from tool/DB/model outputs.
 
+    Prefers structured data already attached to `result` (from a successful
+    agent run). For anything missing — including when the agent failed and
+    `result` is empty — it recomputes directly via the tools' .func (pure
+    DB / engine / embedding calls, NO LLM). Each section is independently
+    fault-tolerant.
+    """
+    result = result or {}
 
-def _build_sections(account_id: str) -> dict:
-    """Build all structured cards directly from the (LLM-free) tools.
-    Runs identically whether or not the agent/LLM succeeded — this is the
-    resilience guarantee and doubles as demo-mode."""
     from agent.tools import (
         get_transaction_history,
         get_transaction_graph,
@@ -222,11 +178,10 @@ def _build_sections(account_id: str) -> dict:
     )
 
     # 1. Account Summary ────────────────────────────────────────
-    # NOTE: get_transaction_history computes its summary over the rows it fetches
-    # (default LIMIT 50). Pass a high limit so totals/sums reflect the FULL history,
-    # not just the last 50 transactions.
-    hist = _load_tool_json(get_transaction_history.func, account_id, 100000)
-    summary = (hist.get("summary") if isinstance(hist, dict) else {}) or {}
+    summary = (result.get("history_data") or {}).get("summary") or {}
+    if not summary:
+        summary = _load_tool_json(get_transaction_history.func, account_id).get("summary") or {}
+
     account_summary = {
         "total_transactions":    summary.get("total_transactions"),
         "transactions_sent":     summary.get("transactions_sent"),
@@ -238,61 +193,77 @@ def _build_sections(account_id: str) -> dict:
         "fraud_flagged_count":   summary.get("fraud_flagged_count"),
         "high_risk_count":       summary.get("high_risk_count"),
         "date_range":            summary.get("date_range"),
-        "txn_type_breakdown":    summary.get("txn_type_breakdown") or {},
     }
 
     # 2. Graph Intelligence ─────────────────────────────────────
-    gdata = _load_tool_json(get_transaction_graph.func, account_id)
-    # graph_profile keys come from FundFlowGraph.get_account_profile() — passed
-    # through RAW so whatever keys it emits reach the frontend unchanged.
+    gdata = result.get("graph_data") or {}
+    if not gdata:
+        gdata = _load_tool_json(get_transaction_graph.func, account_id)
+    profile = gdata.get("graph_profile") or {}
     graph_intelligence = {
-        "mule_score":         gdata.get("mule_score"),
-        "is_suspected_mule":  gdata.get("is_suspected_mule"),
-        "in_ring":            gdata.get("in_ring"),
-        "ring_count":         gdata.get("ring_count"),
-        "ring_ids":           gdata.get("ring_ids") or [],
-        "graph_profile":      gdata.get("graph_profile") or {},
-        "connected_nodes":    gdata.get("connected_nodes") or [],
-        "fraud_edges":        gdata.get("fraud_edges") or [],
-        "fund_flow_summary":  gdata.get("fund_flow_summary") or {},
-        "ego_graph_size":     gdata.get("ego_graph_size") or {},
+        "mule_score":        gdata.get("mule_score"),
+        "is_suspected_mule": gdata.get("is_suspected_mule"),
+        "in_ring":           gdata.get("in_ring"),
+        "ring_count":        gdata.get("ring_count"),
+        "ring_ids":          gdata.get("ring_ids") or [],
+        "graph_profile": {
+            "in_degree":     profile.get("in_degree"),
+            "out_degree":    profile.get("out_degree"),
+            "net_flow":      profile.get("net_flow"),
+            "max_fraud_prob": profile.get("max_fraud_prob"),
+        },
+        "connected_nodes":   gdata.get("connected_nodes") or [],
     }
 
     # 3. ML Risk + SHAP ────────────────────────────────────────
-    # Score the account's highest-risk REAL transaction (not an empty {}).
-    txn = _highest_risk_txn(account_id) or {}
-    rdata = _load_tool_json(score_risk.func, account_id, txn)
+    rdata = result.get("risk_data") or {}
+    if not rdata:
+        # NOTE: keep the same call signature the agent uses. If score_risk needs
+        # real transaction features rather than {}, fix it inside agent.tools so
+        # both the agent and this fallback stay consistent.
+        rdata = _load_tool_json(score_risk.func, account_id, {})
+
     top_feats = []
     for f in rdata.get("top_features") or []:
         val = _pick_number(f)
         top_feats.append({
             "feature":      f.get("feature"),
-            "shap_value":   val,   # frontend hasShap check needs this non-null
+            "shap_value":   val,
             "contribution": val,
             "direction":    f.get("direction", ""),
         })
     ml_risk = {
-        "top_shap_features":  top_feats,
+        "top_shap_features": top_feats,
         "decision_threshold": rdata.get("decision_threshold", 0.7),
-        "scored_txn_id":      txn.get("txn_id"),
-        "interpretation":     rdata.get("interpretation", ""),
     }
     risk_tier         = rdata.get("risk_tier", "UNKNOWN")
     fraud_probability = rdata.get("fraud_probability")
 
     # 4. Typologies ───────────────────────────────────────────
-    tdata = _load_tool_json(detect_typology.func, account_id)
-    typs = (tdata.get("typologies") if isinstance(tdata, dict) else []) or []
+    typs = result.get("typologies") or []
+    if not typs:
+        typs = _load_tool_json(detect_typology.func, account_id).get("typologies") or []
     typologies = [
         {"type": t.get("type"), "description": t.get("description"), "risk": t.get("risk")}
         for t in typs
     ]
 
     # 5. Regulatory Citations (finding-driven) ──────────────────────────
-    typology_types = [t.get("type") for t in typologies]
-    rag_query = _rag_query_for(typology_types)
-    reg_parsed = _load_tool_json(search_regulations.func, rag_query, top_k=3)
-    regs = _extract_results(reg_parsed)
+    regs = result.get("regulations") or []
+    if not regs:
+        typology_types = [t.get("type") for t in typologies]
+        if "MULE_ACCOUNT" in typology_types:
+            rag_query = "money mule layering intermediary shell accounts"
+        elif "ROUND_TRIPPING" in typology_types:
+            rag_query = "circular trading round tripping fund flow loops"
+        elif "LARGE_VALUE_CLUSTERING" in typology_types:
+            rag_query = "structuring suspicious transaction threshold avoidance reporting"
+        elif "SMURFING_FAN_IN" in typology_types:
+            rag_query = "smurfing structuring fan-in multiple senders"
+        else:
+            rag_query = "general compliance transaction monitoring reporting guidelines"
+        regs = _load_tool_json(search_regulations.func, rag_query, top_k=3).get("results") or []
+
     regulatory_citations = [
         {"rank": i + 1, "source": r.get("source"), "page": r.get("page"), "text": r.get("text")}
         for i, r in enumerate(regs)
@@ -317,48 +288,14 @@ def _build_sections(account_id: str) -> dict:
     }
 
 
-def _deterministic_str_draft(account_id: str) -> str:
-    """Build the STR prose WITHOUT the LLM, using the same pure-Python
-    formatter the orchestrator uses. Guarantees the Download STR button works
-    even when the agent is rate-limited/unavailable."""
-    try:
-        from agent.str_generator import format_str
-        from agent.tools import (
-            get_transaction_history,
-            get_transaction_graph,
-            score_risk,
-            detect_typology,
-            search_regulations,
-        )
-        history_data = _load_tool_json(get_transaction_history.func, account_id, 100000)
-        graph_data   = _load_tool_json(get_transaction_graph.func, account_id)
-        txn          = _highest_risk_txn(account_id) or {}
-        risk_data    = _load_tool_json(score_risk.func, account_id, txn)
-        tdata        = _load_tool_json(detect_typology.func, account_id)
-        typologies   = (tdata.get("typologies") if isinstance(tdata, dict) else []) or []
-        rag_query    = _rag_query_for([t.get("type") for t in typologies])
-        reg_parsed   = _load_tool_json(search_regulations.func, rag_query, top_k=3)
-        regs         = _extract_results(reg_parsed)
-        return format_str(
-            account_id=account_id,
-            history_data=history_data if isinstance(history_data, dict) else {},
-            graph_data=graph_data if isinstance(graph_data, dict) else {},
-            risk_data=risk_data if isinstance(risk_data, dict) else {},
-            regulations=regs,
-            typologies=typologies,
-        )
-    except Exception as e:
-        logger.error("Deterministic STR draft failed for %s: %s", account_id, e)
-        return ""
-
-
 # ═══════════════════════════════════════════════════════════════
 # ROUTES
 # ═══════════════════════════════════════════════════════════════
 
+# ── Health ──────────────────────────────────────────────────
 @app.get("/health", tags=["Platform"])
 def health():
-    """Platform stats for the landing page stats strip."""
+    """Returns platform stats for the landing page stats strip."""
     db = _db_stats()
     return {
         "status": "ok",
@@ -372,10 +309,11 @@ def health():
         "model":        "XGBoost (PaySim-trained, FundFlow engine)",
         "rag_ingested": _chroma_ready(),
         "agent":        "LangGraph ReAct (GPT-4o-mini)",
-        "version":      "1.3.0",
+        "version":      "1.1.0",
     }
 
 
+# ── Investigate ────────────────────────────────────────────
 class InvestigateRequest(BaseModel):
     account_id: str
 
@@ -383,11 +321,13 @@ class InvestigateRequest(BaseModel):
 def _run_investigation(job_id: str, account_id: str):
     """Background thread.
 
-    1) Best-effort LLM agent run for the STR prose + guardrails.
-    2) ALWAYS build the deterministic cards from the tools.
+    Order matters:
+      1) Try the LLM agent for the STR prose + guardrails (best effort).
+      2) ALWAYS build the deterministic cards afterwards, preferring any
+         structured data the agent produced, otherwise recomputing via tools.
 
-    A rate-limited/failed agent no longer blanks the investigation — it only
-    drops the narrative prose; llm_status records why.
+    A rate-limited / failed agent no longer blanks the investigation — it only
+    drops the narrative prose, and llm_status records why.
     """
     result: dict = {}
     llm_status = "ok"
@@ -407,16 +347,17 @@ def _run_investigation(job_id: str, account_id: str):
 
     # 2) Deterministic cards ALWAYS. This is the resilience guarantee.
     try:
-        sections = _build_sections(account_id)
+        sections = _build_sections(account_id, result)
     except Exception as e:
+        # Only a hard DB/engine failure lands here — genuinely unrecoverable.
         logger.error("Deterministic section build failed for %s: %s", account_id, e)
         with _jobs_lock:
             _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = str(e)
         return
 
-    raw_trace = result.get("tool_trace", []) if isinstance(result, dict) else []
-    g = (result.get("guardrails", {}) if isinstance(result, dict) else {}) or {}
+    raw_trace = result.get("tool_trace", [])
+    g = result.get("guardrails", {}) or {}
 
     llm_note = None
     if llm_status != "ok":
@@ -432,17 +373,13 @@ def _run_investigation(job_id: str, account_id: str):
         "tool_trace":       [{"tool": t, "status": "done"} for t in raw_trace],
         "risk_tier":        sections.get("risk_tier"),
         "fraud_probability": sections.get("fraud_probability"),
-        "recommendation":   sections.get("recommendation"),
         "guardrails": {
             "passed":     g.get("passed", False),
             "violations": g.get("violations", []),
             "warnings":   g.get("warnings", []),
         },
         "str_sections":   sections,
-        "str_draft_text": (
-            (result.get("str_draft") if isinstance(result, dict) else "")
-            or _deterministic_str_draft(account_id)
-        ),
+        "str_draft_text": result.get("str_draft", ""),
         "llm_status":     llm_status,   # "ok" | "unavailable"
         "llm_error":      llm_error,
         "llm_note":       llm_note,
@@ -455,7 +392,10 @@ def _run_investigation(job_id: str, account_id: str):
 
 @app.post("/investigate", status_code=202, tags=["Investigation"])
 def start_investigation(req: InvestigateRequest):
-    """Start an async investigation. Poll GET /investigate/{job_id} until done."""
+    """
+    Start an asynchronous investigation. Returns job_id to poll.
+    Poll GET /investigate/{job_id} every 2 seconds until status == 'done'.
+    """
     if not req.account_id or not req.account_id.strip():
         raise HTTPException(status_code=400, detail="account_id is required")
 
@@ -500,6 +440,7 @@ def get_investigation(job_id: str):
     if job["status"] == "running":
         return {"job_id": job_id, "account_id": job["account_id"], "status": "running", "tool_trace": []}
 
+    # Done — payload was fully assembled in the worker thread.
     return job.get("payload") or {"job_id": job_id, "status": "done"}
 
 
@@ -510,7 +451,7 @@ class GraphRequest(BaseModel):
 
 
 def _graph_edges_from_sql(account_id: str):
-    """Shared SQL edge/node builder for the primary path and the fallback."""
+    """Shared SQL edge/node builder used by the primary path and the fallback."""
     conn = _get_db()
     rows = conn.execute("""
         SELECT sender_account, receiver_account, amount,
@@ -541,16 +482,13 @@ def _graph_edges_from_sql(account_id: str):
 def get_graph(req: GraphRequest):
     """Build the transaction network for an account. Used by Graph View page."""
     try:
-        # Route through the SAME tool the investigation uses, so the Graph page
-        # and the investigation can never disagree about mule status again.
-        # (The old code imported build_ego_graph/score_mule/detect_rings, which
-        #  do not exist in the current graph modules -> silent ImportError ->
-        #  empty graph_analysis -> page wrongly showed "Not a Suspected Mule".)
-        from agent.tools import get_transaction_graph
+        from graph.fund_flow import build_ego_graph
+        from graph.mule_detector import score_mule
+        from graph.ring_detector import detect_rings
 
-        gdata = _load_tool_json(get_transaction_graph.func, req.account_id, req.max_hops)
-        if not gdata or gdata.get("error"):
-            raise RuntimeError(gdata.get("error", "graph tool returned no data"))
+        G = build_ego_graph(req.account_id, max_hops=req.max_hops)
+        mule_result = score_mule(G, req.account_id)
+        ring_result = detect_rings(G, req.account_id)
 
         nodes, edges = _graph_edges_from_sql(req.account_id)
         high_risk = sum(1 for e in edges if e["fraud_prob"] > 0.7)
@@ -565,17 +503,15 @@ def get_graph(req: GraphRequest):
                 "high_risk_edges": high_risk,
             },
             "graph_analysis": {
-                "mule_score":        gdata.get("mule_score"),
-                "is_suspected_mule": gdata.get("is_suspected_mule"),
-                "in_ring":           gdata.get("in_ring"),
-                "ring_count":        gdata.get("ring_count", 0),
-                "graph_profile":     gdata.get("graph_profile", {}),
+                "mule_score":        mule_result.get("mule_score"),
+                "is_suspected_mule": mule_result.get("is_suspected_mule"),
+                "in_ring":           ring_result.get("in_ring"),
+                "ring_count":        ring_result.get("ring_count", 0),
+                "graph_profile":     mule_result.get("graph_profile", {}),
             },
         }
-    except Exception as e:
-        logger.error("Graph error: %s", e)
-        # Degraded fallback: still return the network so the page renders, but
-        # mark analytics unavailable -- NEVER silently report a clean account.
+    except ImportError as e:
+        logger.warning("Graph engine import failed (%s), using SQL fallback", e)
         try:
             nodes, edges = _graph_edges_from_sql(req.account_id)
             return {
@@ -583,10 +519,13 @@ def get_graph(req: GraphRequest):
                 "nodes":      nodes,
                 "edges":      edges,
                 "stats":      {"total_nodes": len(nodes), "total_edges": len(edges)},
-                "graph_analysis": {"unavailable": True, "error": str(e)},
+                "graph_analysis": {},
             }
         except Exception as e2:
             raise HTTPException(status_code=500, detail=str(e2))
+    except Exception as e:
+        logger.error("Graph error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── RAG tool ──────────────────────────────────────────────
@@ -608,7 +547,7 @@ def rag_search(req: RagRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Alerts ──────────────────────────────────────────────
+# ── Alerts ───────────────────────────────────────────────
 def _normalize_accounts_involved(val):
     """Coerce accounts_involved into a clean list[str] regardless of stored form."""
     if not val:
@@ -693,6 +632,12 @@ def get_transactions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Root ────────────────────────────────────────────────
 @app.get("/", tags=["Platform"])
 def root():
-    return {"name": "Sentinel AI API", "version": "1.2.0", "docs": "/docs", "health": "/health"}
+    return {
+        "name":    "Sentinel AI API",
+        "version": "1.1.0",
+        "docs":    "/docs",
+        "health":  "/health",
+    }
