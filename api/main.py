@@ -567,17 +567,38 @@ def get_graph(req: GraphRequest):
         subj = mule_df[mule_df["account"] == req.account_id] if len(mule_df) else mule_df
         if len(subj):
             m = subj.iloc[0]
-            mule_score    = float(m["mule_score"])
-            is_mule       = bool(int(m["is_suspected_mule"]))
+            mule_score = float(m["mule_score"])
+            is_mule    = bool(int(m["is_suspected_mule"]))
+        else:
+            mule_score, is_mule = 0.0, False
+
+        # Graph-metrics profile for the subject, read straight from the graph so
+        # it always populates. Frontend (GraphView.jsx) expects exactly:
+        # in_degree, out_degree, total_received, total_sent,
+        # passthrough_ratio, fan_out_ratio.
+        acct = req.account_id
+        if acct in Gnx:
+            _node = Gnx.nodes[acct]
+            _in_deg  = int(Gnx.in_degree(acct))      # incoming transfer edges
+            _out_deg = int(Gnx.out_degree(acct))     # outgoing transfer edges
+            _dist_senders   = len(set(Gnx.predecessors(acct)))
+            _dist_receivers = len(set(Gnx.successors(acct)))
+            _recv = float(_node.get("total_received", 0) or 0)
+            _sent = float(_node.get("total_sent", 0) or 0)
+            _passthrough = min(_sent / _recv, 1.0) if _recv > 0 else 0.0
+            _fan_out = (_dist_receivers / _dist_senders) if _dist_senders > 0 else float(_dist_receivers)
             graph_profile = {
-                "passthrough_ratio": float(m.get("passthrough_ratio", 0) or 0),
-                "unique_senders":    int(m.get("unique_senders", 0) or 0),
-                "unique_receivers":  int(m.get("unique_receivers", 0) or 0),
-                "avg_fwd_delay_min": (None if pd.isna(m.get("avg_fwd_delay_min"))
-                                      else float(m.get("avg_fwd_delay_min"))),
+                "in_degree":         _in_deg,
+                "out_degree":        _out_deg,
+                "total_received":    round(_recv, 2),
+                "total_sent":        round(_sent, 2),
+                "passthrough_ratio": round(_passthrough, 4),
+                "fan_out_ratio":     round(_fan_out, 4),
+                "unique_senders":    _dist_senders,
+                "unique_receivers":  _dist_receivers,
             }
         else:
-            mule_score, is_mule, graph_profile = 0.0, False, {}
+            graph_profile = {}
 
         # --- 4. Causal multi-hop fund-flow trace from the subject ---------
         try:
@@ -762,7 +783,7 @@ def get_transactions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Root ────────────────────────────────────────────────
+# ── Root ──────────────────────────────────���─────────────
 @app.get("/", tags=["Platform"])
 def root():
     return {
