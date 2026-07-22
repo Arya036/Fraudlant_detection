@@ -404,7 +404,7 @@ Built on top of the ML foundation:
 - **Local development:** see [`DEPLOYMENT.md`](./DEPLOYMENT.md) (or just run `.\start-all.ps1`).
 - **Production / real hosting:** see [`DEPLOYMENT_PRODUCTION.md`](./DEPLOYMENT_PRODUCTION.md) — a full teach-you-how guide (Oracle Cloud Free Tier backend + Vercel frontends, Docker, HTTPS, and this project's specific gotchas).
 
-- **Deployed Project link:**https://aml-investigation-detection-jp9z-g9cij82bp-arya03.vercel.app/
+- Deployed Project link:https://aml-investigation-detection-jp9z-g9cij82bp-arya03.vercel.app/
 
 ---
 
