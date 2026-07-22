@@ -1646,16 +1646,13 @@
       display: none !important;
     }
 
-    /* Fix: the header shows TWO "Sentinel AI" wordmarks stacked at the same
-       fixed position - a plain-text one (in the markup) and the template's
-       animated per-letter one (.logo-type__char spans added on load). That
-       double-render is the overlap. Hide the animated per-letter copy so only
-       the single clean text wordmark remains. */
-    .header-logo__type .logo-type__char {
-      display: none !important;
-    }
-    .header-logo .header-logo__type,
+    /* Fix: the header renders the "Sentinel AI" wordmark TWICE at the same
+       spot (a plain-text copy + the template's animated per-letter copy),
+       which overlap. Rather than guess which copy to hide, we blank out ALL
+       text inside the wordmark box and draw ONE clean CSS label instead.
+       Net result: exactly one "Sentinel AI", no overlap. */
     .header-logo__type {
+      font-size: 0 !important;          /* collapse any real text inside */
       width: auto !important;
       max-width: none !important;
       height: auto !important;
@@ -1664,6 +1661,24 @@
       display: inline-flex !important;
       align-items: center !important;
       opacity: 1 !important;
+    }
+    .header-logo__type * {
+      font-size: 0 !important;          /* hide animated per-letter spans */
+      opacity: 0 !important;
+    }
+    .header-logo__type::after {
+      content: "Sentinel AI";          /* the single clean wordmark */
+      font-family: ParaboleWeb, sans-serif;
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #eee;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      line-height: 1;
+    }
+    /* Safety: if the whole logo anchor gets duplicated on load, keep the first only */
+    .header .header-logo ~ .header-logo {
+      display: none !important;
     }
   </style>
   <script>
