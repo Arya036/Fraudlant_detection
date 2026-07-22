@@ -1,18 +1,8 @@
 """
-api/main.py — Sentinel AI FastAPI Backend  (HARDENED)
+api/main.py — Sentinel AI FastAPI Backend  
 =====================================================
 Exposes the LangGraph agent and tool suite as a REST API.
 The React frontend consumes these endpoints.
-
-KEY ARCHITECTURE (why this version is resilient):
-    The structured investigation CARDS (account summary, graph intelligence,
-    ML risk, SHAP, typologies, citations) are ALL deterministic DB / engine /
-    embedding outputs. They do NOT need the LLM.
-
-    So we compute them ALWAYS, independent of the agent. The LLM is used only
-    for the STR *prose* (str_draft). If the LLM fails (e.g. OpenAI rate limit),
-    we keep every card populated and simply mark the narrative as unavailable.
-    A rate limit therefore DEGRADES the demo gracefully instead of blanking it.
 
 Run:
     uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload

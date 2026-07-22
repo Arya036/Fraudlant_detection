@@ -52,6 +52,9 @@ DEMO_PRESENTATION_PLAYBOOK.md
 DEMO_TEST_CASES.md
 DEMO_GUIDE.txt
 EXECUTION_PLAN_2_WEEKS.md
+DEPLOYMENT.md
+SETUP.md
+FEATURE_REFERENCE.md
 
 # ── Trained model binary (share via Google Drive) ────────
 # models/saved/xgboost_fraud.pkl   ← uncomment to exclude model
