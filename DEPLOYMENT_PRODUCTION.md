@@ -248,4 +248,3 @@ curl $BASE/investigate/<job_id>
 
 ---
 
-_Last updated for Sentinel AI API v1.2.0._
