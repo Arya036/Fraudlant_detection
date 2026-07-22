@@ -59,6 +59,8 @@ EXECUTION_PLAN_2_WEEKS.md
 
 #tests
 scratch_verify.py
+test_str_output.txt
+verify_str_output.txt
 
 # ── Generated test output ─────────────────────────────────
 test_str_output.txt
