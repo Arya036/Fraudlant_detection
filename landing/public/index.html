@@ -1637,13 +1637,28 @@
   <style>
     @media (min-width: 1024px) {
       #sentinel-signin-btn-wrapper {
-        top: 5.35rem !important;
+        top: 5rem !important;
         right: 17.5rem !important;
       }
     }
 
     .loader__btn-no-sound-wrapper {
       display: none !important;
+    }
+
+    /* Fix: keep the "Sentinel AI" wordmark on one clean line (no overlap) */
+    .header-logo__type {
+      width: auto !important;
+      min-width: -moz-max-content !important;
+      min-width: max-content !important;
+      overflow: visible !important;
+      white-space: nowrap !important;
+      letter-spacing: 0.05em !important;
+    }
+    .header-logo__type .logo-type__char {
+      position: static !important;
+      transform: none !important;
+      opacity: 1 !important;
     }
   </style>
   <script>
