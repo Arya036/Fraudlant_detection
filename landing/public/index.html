@@ -1646,18 +1646,31 @@
       display: none !important;
     }
 
-    /* Fix: keep the "Sentinel AI" wordmark on one clean line (no overlap) */
+    /* Fix: stop the "Sentinel AI" wordmark letters from overlapping.
+       The template gives .header-logo__type a fixed 9.8rem-wide box sized
+       for a shorter original brand; free the width and lay letters inline. */
+    .header-logo .header-logo__type,
     .header-logo__type {
       width: auto !important;
+      max-width: none !important;
       min-width: -moz-max-content !important;
       min-width: max-content !important;
+      height: auto !important;
       overflow: visible !important;
       white-space: nowrap !important;
-      letter-spacing: 0.05em !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      letter-spacing: normal !important;
     }
     .header-logo__type .logo-type__char {
       position: static !important;
       transform: none !important;
+      left: auto !important;
+      right: auto !important;
+      top: auto !important;
+      bottom: auto !important;
+      margin: 0 !important;
+      display: inline-block !important;
       opacity: 1 !important;
     }
   </style>
